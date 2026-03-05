@@ -10,8 +10,8 @@ private:
   char *stack_buffer;
 
 public:
-  explicit StackMem(unsigned int stack_size) {
-    stack_size = stack_size;
+  explicit StackMem(unsigned int stack_size_) {
+    stack_size = stack_size_;
     stack_buffer = (char *)malloc(stack_size);
     stack_bp = stack_buffer + stack_size;
   }

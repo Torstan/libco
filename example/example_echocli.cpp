@@ -68,11 +68,13 @@ void inline AddSuccCnt() { iSuccCnt.fetch_add(1, std::memory_order_relaxed); }
 void inline AddFailCnt() { iFailCnt.fetch_add(1, std::memory_order_relaxed); }
 
 void PrintStat() {
-  size_t now = time(nullptr);
+  size_t now = GetTickUS();
   size_t time_old = iTime.load(std::memory_order_relaxed);
+  size_t time_delta = now - time_old;
+  size_t succ_cnt = iSuccCnt.load(std::memory_order_relaxed);
   if (now > time_old) {
-    printf("time %lu Succ Cnt %ld Fail Cnt %ld\n", time_old,
-           iSuccCnt.load(std::memory_order_relaxed),
+    printf("time %lu qps %ld Succ Cnt %ld Fail Cnt %ld\n", time_old,
+           succ_cnt * 1000000 / time_delta, succ_cnt,
            iFailCnt.load(std::memory_order_relaxed));
     iTime.store(now, std::memory_order_relaxed);
     iSuccCnt.store(0, std::memory_order_relaxed);
@@ -126,25 +128,20 @@ static void *readwrite_routine(void *arg) {
       }
     }
 
-    ret = write(fd, str, 8);
-    if (ret > 0) {
-      ret = read(fd, buf, sizeof(buf));
-      if (ret <= 0) {
-        // printf("co %p read ret %d errno %d (%s)\n",
-        //		co_self(), ret,errno,strerror(errno));
-        close(fd);
-        fd = -1;
-        AddFailCnt();
-      } else {
-        // printf("echo %s fd %d\n", buf,fd);
-        AddSuccCnt();
+    while (true) {
+      int ret = write(fd, str, sizeof(str));
+      if (ret > 0) {
+        ret = read(fd, buf, sizeof(buf));
       }
-    } else {
-      // printf("co %p write ret %d errno %d (%s)\n",
-      //		co_self(), ret,errno,strerror(errno));
+      if (ret > 0 || (-1 == ret && EAGAIN == errno)) {
+        if (ret > 0)
+          AddSuccCnt();
+        continue;
+      }
       close(fd);
       fd = -1;
       AddFailCnt();
+      break;
     }
   }
   return 0;
@@ -174,7 +171,7 @@ int main(int argc, char *argv[]) {
   }
 
   for (;;) {
-    sleep(1);
+    ::usleep(1000000);
     PrintStat();
   }
   return 0;
