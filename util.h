@@ -16,11 +16,12 @@
 
 inline void co_log_err(const char *fmt, ...) {}
 
-inline unsigned long long GetTickMS() {
+inline unsigned long long GetTickUS() {
   struct timeval now = {0};
   gettimeofday(&now, nullptr);
   unsigned long long u = now.tv_sec;
-  u *= 1000;
-  u += now.tv_usec / 1000;
+  u *= 1000000;
+  u += now.tv_usec;
   return u;
 }
+inline unsigned long long GetTickMS() { return GetTickUS() / 1000; }
