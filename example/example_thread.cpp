@@ -17,24 +17,29 @@ available.
 * limitations under the License.
 */
 
-#pragma once
+#include "co_routine.h"
+
+#include <pthread.h>
+#include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
 
-typedef void *(*coctx_func_t)(void *s, void *s2);
-struct coctx_param_t {
-  const void *s1;
-  const void *s2;
-};
+int loop(void *) { return 0; }
+static void *routine_func(void *) {
+  co_eventloop(loop, 0);
+  return 0;
+}
+int main(int argc, char *argv[]) {
+  int cnt = atoi(argv[1]);
 
-struct coctx_t {
-#if defined(__i386__)
-  void *regs[8];
-#else
-  void *regs[14];
-#endif
-  size_t ss_size;
-  char *ss_sp;
-};
+  pthread_t tid[cnt];
+  for (int i = 0; i < cnt; i++) {
+    pthread_create(tid + i, nullptr, routine_func, 0);
+  }
+  for (;;) {
+    sleep(1);
+  }
 
-int coctx_init(coctx_t *ctx);
-int coctx_make(coctx_t *ctx, coctx_func_t func, const void *s, const void *s1);
+  return 0;
+}

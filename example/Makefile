@@ -21,46 +21,41 @@ COMM_MAKE = 1
 COMM_ECHO = 1
 version=0.5
 v=debug
-include co.mk
+include ../co.mk
 
 ########## options ##########
-CFLAGS += -g -fno-strict-aliasing -O2 --std=c++17 -Wall -export-dynamic \
+CFLAGS += -I../ -g -fno-strict-aliasing -O2 --std=c++17 -Wall -export-dynamic \
 	-Wall -pipe  -D_GNU_SOURCE -D_REENTRANT -fPIC -Wno-deprecated -m64
 
 UNAME := $(shell uname -s)
 
 ifeq ($(UNAME), FreeBSD)
-LINKS += -g -L./lib -lcolib -lpthread
+LINKS += -g -L../lib -lcolib -lpthread
 else
-LINKS += -g -L./lib -lcolib -lpthread -ldl
+LINKS += -g -L../lib -lcolib -lpthread -ldl
 endif
 
-COLIB_OBJS=co_epoll.o co_cond.o thread_worker.o routine_context.o co_routine.o co_hook_sys_call.o coctx_swap.o coctx.o
+PROGS = example_poll example_echosvr example_echocli example_thread example_cond example_setenv
 
-all: colib examples tests
+all:$(PROGS)
 
-examples:
-	cd example && make
-tests:
-	cd test && make
+example_echosvr:example_echosvr.o
+	$(BUILDEXE)
+example_echocli:example_echocli.o
+	$(BUILDEXE)
+example_thread:example_thread.o
+	$(BUILDEXE)
+example_poll:example_poll.o
+	$(BUILDEXE)
+example_exit:example_exit.o
+	$(BUILDEXE)
+example_cond:example_cond.o
+	$(BUILDEXE)
+example_setenv:example_setenv.o
+	$(BUILDEXE)
 
-colib:libcolib.a libcolib.so
-
-libcolib.a: $(COLIB_OBJS)
-	$(ARSTATICLIB)
-libcolib.so: $(COLIB_OBJS)
-	$(BUILDSHARELIB)
-
-dist: clean libco-$(version).src.tar.gz
-
-libco-$(version).src.tar.gz:
-	@find . -type f | grep -v CVS | grep -v .svn | sed s:^./:libco-$(version)/: > MANIFEST
-	@(cd ..; ln -s libco_pub libco-$(version))
-	(cd ..; tar cvf - `cat libco_pub/MANIFEST` | gzip > libco_pub/libco-$(version).src.tar.gz)
-	@(cd ..; rm libco-$(version))
+dist: clean
 
 clean:
-	$(CLEAN) *.o
-	rm -fr MANIFEST lib solib libco-$(version).src.tar.gz libco-$(version)
-	cd example && make clean
+	$(CLEAN) *.o $(PROGS)
 

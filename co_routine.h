@@ -1,93 +1,116 @@
 /*
-* Tencent is pleased to support the open source community by making Libco available.
+* Tencent is pleased to support the open source community by making Libco
+available.
 
 * Copyright (C) 2014 THL A29 Limited, a Tencent company. All rights reserved.
 *
-* Licensed under the Apache License, Version 2.0 (the "License"); 
-* you may not use this file except in compliance with the License. 
+* Licensed under the Apache License, Version 2.0 (the "License");
+* you may not use this file except in compliance with the License.
 * You may obtain a copy of the License at
 *
 *	http://www.apache.org/licenses/LICENSE-2.0
 *
-* Unless required by applicable law or agreed to in writing, 
-* software distributed under the License is distributed on an "AS IS" BASIS, 
-* WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. 
-* See the License for the specific language governing permissions and 
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an "AS IS" BASIS,
+* WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+* See the License for the specific language governing permissions and
 * limitations under the License.
 */
 
-#ifndef __CO_ROUTINE_H__
-#define __CO_ROUTINE_H__
+#pragma once
 
+#include "co_stack.h"
+#include "coctx.h"
+#include "routine_context.h"
+#include "util.h"
 #include <stdint.h>
 #include <sys/poll.h>
-#include <pthread.h>
 
-//1.struct
-
-struct stCoRoutine_t;
-struct stShareStack_t;
-
-struct stCoRoutineAttr_t
-{
-	int stack_size;
-	stShareStack_t*  share_stack;
-	stCoRoutineAttr_t()
-	{
-		stack_size = 128 * 1024;
-		share_stack = NULL;
-	}
-}__attribute__ ((packed));
-
-struct stCoEpoll_t;
+typedef void *(*pfn_co_routine_t)(void *);
 typedef int (*pfn_co_eventloop_t)(void *);
-typedef void *(*pfn_co_routine_t)( void * );
 
-//2.co_routine
+class EpollCtx;
 
-int 	co_create( stCoRoutine_t **co,const stCoRoutineAttr_t *attr,void *(*routine)(void*),void *arg );
-void    co_resume( stCoRoutine_t *co );
-void    co_yield( stCoRoutine_t *co );
-void    co_yield_ct(); //ct = current thread
-void    co_release( stCoRoutine_t *co );
-void    co_reset(stCoRoutine_t * co); 
+// Coroutine class - encapsulates coroutine state and lifecycle
+class Coroutine {
+public:
+  // Create a new coroutine (initializes thread env if needed)
+  static Coroutine *Create(pfn_co_routine_t func, void *arg);
+  // Get the currently running coroutine on this thread
+  static Coroutine *Self();
 
-stCoRoutine_t *co_self();
+  int Run();
 
-int		co_poll( stCoEpoll_t *ctx,struct pollfd fds[], nfds_t nfds, int timeout_ms );
-void 	co_eventloop( stCoEpoll_t *ctx,pfn_co_eventloop_t pfn,void *arg );
+  // Yield from the current coroutine back to the scheduler
+  void Yield();
 
-//3.specific
+  // Lifecycle
+  void Resume();
+  void Reset(); // allow re-use after timeout
+  void Free();
 
-int 	co_setspecific( pthread_key_t key, const void *value );
-void *	co_getspecific( pthread_key_t key );
+  void EnableHook() { enable_sys_hook_ = true; }
+  void DisableHook() { enable_sys_hook_ = false; }
+  bool IsHookEnabled() const { return enable_sys_hook_; }
 
-//4.event
+  void *&GetSysEnvs() { return sys_envs_; }
+  // Internal: context access used by runtime internals
+  void SetMain() { is_main_ = true; }
 
-stCoEpoll_t * 	co_get_epoll_ct(); //ct = current thread
+private:
+  Coroutine(pfn_co_routine_t func, void *arg);
+  ~Coroutine();
 
-//5.hook syscall ( poll/read/write/recv/send/recvfrom/sendto )
+  pfn_co_routine_t pfn_;
+  void *arg_;
+  RoutineContext routine_ctx_;
 
-void 	co_enable_hook_sys();  
-void 	co_disable_hook_sys();  
-bool 	co_is_enable_sys_hook();
+  bool started_;
+  bool ended_;
+  bool is_main_;
+  bool enable_sys_hook_;
+  void *sys_envs_;
+  StackMem *stack_mem_;
 
-//6.sync
-struct stCoCond_t;
+  friend class ThreadEnv;
+};
 
-stCoCond_t *co_cond_alloc();
-int co_cond_free( stCoCond_t * cc );
+// ThreadEnv - per-thread coroutine environment (epoll + scheduler state)
+class ThreadEnv {
+public:
+  static ThreadEnv *Current();
+  static void Init();
+  EpollCtx *Epoll() { return epoll_ctx_; }
 
-int co_cond_signal( stCoCond_t * );
-int co_cond_broadcast( stCoCond_t * );
-int co_cond_timedwait( stCoCond_t *,int timeout_ms );
+private:
+  ThreadEnv();
+  ~ThreadEnv();
+  EpollCtx *epoll_ctx_;
+  friend class Coroutine;
+};
 
-//7.share stack
-stShareStack_t* co_alloc_sharestack(int iCount, int iStackSize);
+// hook syscall ( poll/read/write/recv/send/recvfrom/sendto )
+void co_enable_hook_sys();
+void co_set_env_list(const char *name[], size_t cnt);
 
-//8.init envlist for hook get/set env
-void co_set_env_list( const char *name[],size_t cnt);
+int co_poll(struct pollfd fds[], nfds_t nfds, int timeout_ms);
+void co_eventloop(pfn_co_eventloop_t func, void *arg);
+inline int co_create(Coroutine **co, pfn_co_routine_t fn, void *arg) {
+  *co = Coroutine::Create(fn, arg);
+  return *co ? 0 : -1;
+}
+inline void co_resume(Coroutine *co) { co->Resume(); }
+inline void co_yield_ct() { Coroutine::Self()->Yield(); }
+inline void co_free(Coroutine *co) { co->Free(); }
+inline Coroutine *co_self() { return Coroutine::Self(); }
+inline ThreadEnv *co_get_curr_thread_env() { return ThreadEnv::Current(); }
 
-void co_log_err( const char *fmt,... );
-#endif
-
+EpollCtx *co_get_epoll_ct(); // defined in co_routine.cpp
+inline void co_disable_hook_sys() {
+  if (auto *c = Coroutine::Self())
+    c->DisableHook();
+}
+inline bool co_is_enable_sys_hook() {
+  auto *c = Coroutine::Self();
+  return c && c->IsHookEnabled();
+}
