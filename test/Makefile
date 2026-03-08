@@ -35,11 +35,14 @@ else
 LINKS += -g -L../lib -lcolib -lpthread -ldl
 endif
 
-PROGS = test_co_routine
+PROGS = test_co_routine test_co_async
 
 all:$(PROGS)
 
 test_co_routine:test_co_routine.o
+	$(BUILDEXE)
+
+test_co_async:test_co_async.o
 	$(BUILDEXE)
 
 
