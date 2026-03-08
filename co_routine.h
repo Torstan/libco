@@ -25,8 +25,8 @@ available.
 #include "util.h"
 #include <stdint.h>
 #include <sys/poll.h>
+#include <functional>
 
-typedef void *(*pfn_co_routine_t)(void *);
 typedef int (*pfn_co_eventloop_t)(void *);
 
 class EpollCtx;
@@ -35,7 +35,7 @@ class EpollCtx;
 class Coroutine {
 public:
   // Create a new coroutine (initializes thread env if needed)
-  static Coroutine *Create(pfn_co_routine_t func, void *arg);
+  static Coroutine *Create(std::function<void()>&& func);
   // Get the currently running coroutine on this thread
   static Coroutine *Self();
 
@@ -58,12 +58,11 @@ public:
   void SetMain() { is_main_ = true; }
 
 private:
-  Coroutine(pfn_co_routine_t func, void *arg);
+  Coroutine(std::function<void()>&& func);
   ~Coroutine();
 
-  pfn_co_routine_t pfn_;
-  void *arg_;
   RoutineContext routine_ctx_;
+  std::function<void()> func_;
 
   bool started_;
   bool ended_;
@@ -95,10 +94,11 @@ void co_set_env_list(const char *name[], size_t cnt);
 
 int co_poll(struct pollfd fds[], nfds_t nfds, int timeout_ms);
 void co_eventloop(pfn_co_eventloop_t func, void *arg);
-inline int co_create(Coroutine **co, pfn_co_routine_t fn, void *arg) {
-  *co = Coroutine::Create(fn, arg);
-  return *co ? 0 : -1;
+
+inline Coroutine* co_create(std::function<void()>&& func) {
+  return Coroutine::Create(std::move(func));
 }
+
 inline void co_resume(Coroutine *co) { co->Resume(); }
 inline void co_yield_ct() { Coroutine::Self()->Yield(); }
 inline void co_free(Coroutine *co) { co->Free(); }

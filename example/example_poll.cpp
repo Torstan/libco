@@ -165,10 +165,12 @@ int main(int argc, char *argv[]) {
   printf("--------------------- routine -------------------\n");
 
   for (int i = 0; i < 10; i++) {
-    Coroutine *co = 0;
+    
     vector<task_t> *v2 = new vector<task_t>();
     *v2 = v;
-    co_create(&co, poll_routine, v2);
+    Coroutine *co = co_create([v2]() {
+      poll_routine(v2);
+    });
     printf("routine i %d\n", i);
     co_resume(co);
   }

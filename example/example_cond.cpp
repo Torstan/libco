@@ -63,12 +63,14 @@ void *Consumer(void *args) {
 int main() {
   stEnv_t *env = new stEnv_t;
 
-  Coroutine *consumer_routine;
-  co_create(&consumer_routine, Consumer, env);
+  Coroutine *consumer_routine = co_create([env]() {
+    Consumer(env);
+  });
   co_resume(consumer_routine);
 
-  Coroutine *producer_routine;
-  co_create(&producer_routine, Producer, env);
+  Coroutine *producer_routine = co_create([env]() {
+    Producer(env);
+  });
   co_resume(producer_routine);
 
   co_eventloop(nullptr, nullptr);
