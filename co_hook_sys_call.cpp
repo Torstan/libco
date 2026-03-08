@@ -39,15 +39,10 @@ available.
 #include <stdlib.h>
 #include <string.h>
 
-#include <netdb.h>
-#include <resolv.h>
-
 #include "co_routine.h"
 #include "util.h"
 #include <map>
 #include <time.h>
-
-typedef long long ll64_t;
 
 struct rpchook_t {
   int user_flag;
@@ -57,10 +52,6 @@ struct rpchook_t {
   struct timeval read_timeout;
   struct timeval write_timeout;
 };
-static inline pid_t GetPid() {
-  char **p = (char **)pthread_self();
-  return p ? *(pid_t *)(p + 18) : getpid();
-}
 static rpchook_t *g_rpchook_socket_fd[102400] = {0};
 
 typedef int (*socket_pfn_t)(int domain, int type, int protocol);
@@ -89,22 +80,11 @@ typedef int (*setsockopt_pfn_t)(int socket, int level, int option_name,
                                 const void *option_value, socklen_t option_len);
 
 typedef int (*fcntl_pfn_t)(int fildes, int cmd, ...);
-typedef struct tm *(*localtime_r_pfn_t)(const time_t *timep, struct tm *result);
-
-typedef void *(*pthread_getspecific_pfn_t)(pthread_key_t key);
-typedef int (*pthread_setspecific_pfn_t)(pthread_key_t key, const void *value);
 
 typedef int (*setenv_pfn_t)(const char *name, const char *value, int overwrite);
 typedef int (*unsetenv_pfn_t)(const char *name);
 typedef char *(*getenv_pfn_t)(const char *name);
-typedef hostent *(*gethostbyname_pfn_t)(const char *name);
-typedef res_state (*__res_state_pfn_t)();
 typedef int (*__poll_pfn_t)(struct pollfd fds[], nfds_t nfds, int timeout);
-typedef int (*gethostbyname_r_pfn_t)(const char *__restrict name,
-                                     struct hostent *__restrict __result_buf,
-                                     char *__restrict __buf, size_t __buflen,
-                                     struct hostent **__restrict __result,
-                                     int *__restrict __h_errnop);
 
 static socket_pfn_t g_sys_socket_func =
     (socket_pfn_t)dlsym(RTLD_NEXT, "socket");
@@ -135,66 +115,13 @@ static unsetenv_pfn_t g_sys_unsetenv_func =
     (unsetenv_pfn_t)dlsym(RTLD_NEXT, "unsetenv");
 static getenv_pfn_t g_sys_getenv_func =
     (getenv_pfn_t)dlsym(RTLD_NEXT, "getenv");
-static __res_state_pfn_t g_sys___res_state_func =
-    (__res_state_pfn_t)dlsym(RTLD_NEXT, "__res_state");
-
-static gethostbyname_pfn_t g_sys_gethostbyname_func =
-    (gethostbyname_pfn_t)dlsym(RTLD_NEXT, "gethostbyname");
-static gethostbyname_r_pfn_t g_sys_gethostbyname_r_func =
-    (gethostbyname_r_pfn_t)dlsym(RTLD_NEXT, "gethostbyname_r");
-
 static __poll_pfn_t g_sys___poll_func =
     (__poll_pfn_t)dlsym(RTLD_NEXT, "__poll");
-
-/*
-static pthread_getspecific_pfn_t g_sys_pthread_getspecific_func
-                        =
-(pthread_getspecific_pfn_t)dlsym(RTLD_NEXT,"pthread_getspecific");
-
-static pthread_setspecific_pfn_t g_sys_pthread_setspecific_func
-                        =
-(pthread_setspecific_pfn_t)dlsym(RTLD_NEXT,"pthread_setspecific");
-
-static pthread_rwlock_rdlock_pfn_t g_sys_pthread_rwlock_rdlock_func
-                        =
-(pthread_rwlock_rdlock_pfn_t)dlsym(RTLD_NEXT,"pthread_rwlock_rdlock");
-
-static pthread_rwlock_wrlock_pfn_t g_sys_pthread_rwlock_wrlock_func
-                        =
-(pthread_rwlock_wrlock_pfn_t)dlsym(RTLD_NEXT,"pthread_rwlock_wrlock");
-
-static pthread_rwlock_unlock_pfn_t g_sys_pthread_rwlock_unlock_func
-                        =
-(pthread_rwlock_unlock_pfn_t)dlsym(RTLD_NEXT,"pthread_rwlock_unlock");
-*/
-
-static inline unsigned long long get_tick_count() {
-  uint32_t lo, hi;
-  __asm__ __volatile__("rdtscp" : "=a"(lo), "=d"(hi));
-  return ((unsigned long long)lo) | (((unsigned long long)hi) << 32);
-}
-
-struct rpchook_connagent_head_t {
-  unsigned char bVersion;
-  struct in_addr iIP;
-  unsigned short hPort;
-  unsigned int iBodyLen;
-  unsigned int iOssAttrID;
-  unsigned char bIsRespNotExist;
-  unsigned char sReserved[6];
-} __attribute__((packed));
 
 #define HOOK_SYS_FUNC(name)                                                    \
   if (!g_sys_##name##_func) {                                                  \
     g_sys_##name##_func = (name##_pfn_t)dlsym(RTLD_NEXT, #name);               \
   }
-
-static inline ll64_t diff_ms(struct timeval &begin, struct timeval &end) {
-  ll64_t u = (end.tv_sec - begin.tv_sec);
-  u *= 1000 * 10;
-  u += (end.tv_usec - begin.tv_usec) / (100);
-  return u;
-}
 
 static inline rpchook_t *get_by_fd(int fd) {
   if (fd > -1 && fd < (int)sizeof(g_rpchook_socket_fd) /

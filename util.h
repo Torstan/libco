@@ -1,18 +1,14 @@
 #pragma once
 
-#include "sys/time.h"
+#include <cstddef>
+#include <sys/time.h>
 
-#ifndef offsetof
-#define offsetof(TYPE, MEMBER) ((size_t) & ((TYPE *)0)->MEMBER)
-#endif
-
-#ifndef container_of
+// container_of: given a pointer to a member, recover the containing object.
+// Uses standard offsetof from <cstddef> instead of custom definition.
+// Usage: container_of(ptr, Type, member_name)
 #define container_of(ptr, type, member)                                        \
-  ({                                                                           \
-    const decltype(((type *)0)->member) *__mptr = (ptr);                       \
-    (type *)((char *)__mptr - offsetof(type, member));                         \
-  })
-#endif
+  reinterpret_cast<type *>(reinterpret_cast<char *>(ptr) -                     \
+                           offsetof(type, member))
 
 inline void co_log_err(const char *fmt, ...) {}
 
