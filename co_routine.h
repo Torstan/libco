@@ -25,6 +25,7 @@ available.
 #include <stdint.h>
 #include <sys/poll.h>
 #include <functional>
+#include <memory>
 
 typedef int (*pfn_co_eventloop_t)(void *);
 
@@ -68,7 +69,7 @@ private:
   bool is_main_;
   bool enable_sys_hook_;
   void *sys_envs_;
-  StackMem *stack_mem_;
+  std::unique_ptr<StackMem> stack_mem_;
 
   friend class ThreadEnv;
 };
@@ -78,12 +79,12 @@ class ThreadEnv {
 public:
   static ThreadEnv *Current();
   static void Init();
-  EpollCtx *Epoll() { return epoll_ctx_; }
+  EpollCtx *Epoll() { return epoll_ctx_.get(); }
 
 private:
   ThreadEnv();
   ~ThreadEnv();
-  EpollCtx *epoll_ctx_;
+  std::unique_ptr<EpollCtx> epoll_ctx_;
   friend class Coroutine;
 };
 
