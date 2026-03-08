@@ -18,6 +18,7 @@ available.
 */
 
 #include "co_routine.h"
+#include "thread_worker.h"
 
 #include <errno.h>
 #include <string.h>
@@ -159,12 +160,13 @@ int main(int argc, char *argv[]) {
   sigaction(SIGPIPE, &sa, nullptr);
 
   for (int k = 0; k < proccnt; k++) {
-    std::thread *t = new std::thread([cnt, ep = endpoint]() {
+    std::thread *t = new std::thread([k, cnt, ep = endpoint]() {
+      ThreadWorker worker(k);
       for (int i = 0; i < cnt; i++) {
         Coroutine *co = Coroutine::Create(readwrite_routine, (void *)&ep);
         co->Resume();
       }
-      co_eventloop(0, 0);
+      worker.run_loop();
       exit(0);
     });
     t->detach();

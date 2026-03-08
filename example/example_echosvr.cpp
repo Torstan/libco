@@ -18,6 +18,7 @@ available.
 */
 
 #include "co_routine.h"
+#include "thread_worker.h"
 
 #include <signal.h>
 #include <stack>
@@ -148,10 +149,14 @@ public:
     }
     return 0;
   }
-  static int reap_fds_wrapper(void *w) {
-    return (static_cast<Worker *>(w))->reap_fds();
+  static void *reap_fds_routine(void *w) {
+    co_enable_hook_sys();
+    for (;;) {
+      (static_cast<Worker *>(w))->reap_fds();
+      poll(nullptr, 0, 1);
+    }
+    return nullptr;
   }
-
   void run(int co_cnt) {
     co_enable_hook_sys();
     for (int i = 0; i < co_cnt; i++) {
@@ -161,8 +166,14 @@ public:
       co_create(&(task->co), readwrite_routine, task);
       co_resume(task->co);
     }
+    {
+      Coroutine *co = nullptr;
+      co_create(&co, Worker::reap_fds_routine, this);
+      co_resume(co);
+    }
+    ThreadWorker tw(worker_id_);
+    tw.run_loop();
 
-    co_eventloop(Worker::reap_fds_wrapper, this);
     exit(0);
   }
 };
@@ -273,7 +284,8 @@ int main(int argc, char *argv[]) {
   co_create(&accept_co, accept_routine, 0);
   co_resume(accept_co);
 
-  co_eventloop(0, 0);
+  ThreadWorker main_worker(-1);
+  main_worker.run_loop();
 
   exit(0);
 
