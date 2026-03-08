@@ -63,4 +63,5 @@ clean:
 	$(CLEAN) *.o
 	rm -fr MANIFEST lib solib libco-$(version).src.tar.gz libco-$(version)
 	cd example && make clean
+	cd test && make clean
 
