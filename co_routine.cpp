@@ -67,10 +67,7 @@ Coroutine::Coroutine(std::function<void()>&& func)
   if (func_) {
     constexpr int stack_size = 256 * 1024;
     stack_mem_ = new StackMem(stack_size);
-
-    auto &ctx = routine_ctx_.GetContext();
-    ctx.ss_sp = stack_mem_->GetStackBuffer();
-    ctx.ss_size = stack_size;
+    routine_ctx_.InitCtx(stack_mem_->GetStackBuffer(), stack_size);
   }
 }
 
@@ -98,8 +95,7 @@ void Coroutine::Yield() { routine_ctx_.switch_out(); }
 
 void Coroutine::Resume() {
   if (!started_) {
-    coctx_make(&routine_ctx_.GetContext(), (coctx_func_t)CoRoutineFunc, this,
-               0);
+    routine_ctx_.MakeCtx((coctx_func_t)CoRoutineFunc, this);
     started_ = true;
   }
   routine_ctx_.switch_in();
