@@ -32,7 +32,7 @@ void test_async_basic_int() {
 
     // The task is scheduled but not yet run. Run the task loop.
     ThreadWorker worker(0);
-    worker.run_loop();
+    worker.run_loop(false);
 
     TEST_ASSERT(f.available(), "future should be available after run_loop");
     int val = f.get();
@@ -52,7 +52,7 @@ void test_async_computation() {
     });
 
     ThreadWorker worker(0);
-    worker.run_loop();
+    worker.run_loop(false);
 
     TEST_ASSERT(f.available(), "future should be available");
     int val = f.get();
@@ -68,7 +68,7 @@ void test_async_string() {
     });
 
     ThreadWorker worker(0);
-    worker.run_loop();
+    worker.run_loop(false);
 
     TEST_ASSERT(f.available(), "future should be available");
     std::string val = f.get();
@@ -84,7 +84,7 @@ void test_async_multiple() {
     Future<int> f3 = async([]() -> int { return 30; });
 
     ThreadWorker worker(0);
-    worker.run_loop();
+    worker.run_loop(false);
 
     TEST_ASSERT(f1.available() && f2.available() && f3.available(),
                 "all futures should be available");
@@ -102,7 +102,7 @@ void test_async_exception() {
     });
 
     ThreadWorker worker(0);
-    worker.run_loop();
+    worker.run_loop(false);
 
     TEST_ASSERT(f.available(), "future should be available");
     TEST_ASSERT(f.failed(), "future should be in failed state");
@@ -128,7 +128,7 @@ void test_async_capture() {
     });
 
     ThreadWorker worker(0);
-    worker.run_loop();
+    worker.run_loop(false);
 
     TEST_ASSERT(f.available(), "future should be available");
     int val = f.get();
