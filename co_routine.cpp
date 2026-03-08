@@ -63,15 +63,12 @@ Coroutine::Coroutine(std::function<void()>&& func)
       enable_sys_hook_(false), sys_envs_(nullptr), stack_mem_(nullptr) {
   if (func_) {
     constexpr int stack_size = 256 * 1024;
-    stack_mem_ = new StackMem(stack_size);
+    stack_mem_ = std::make_unique<StackMem>(stack_size);
     routine_ctx_.InitCtx(stack_mem_->GetStackBuffer(), stack_size);
   }
 }
 
 Coroutine::~Coroutine() {
-  if (stack_mem_) {
-    delete stack_mem_;
-  }
 }
 
 Coroutine *Coroutine::Create(std::function<void()>&& func) {
@@ -103,12 +100,9 @@ void Coroutine::Resume() {
 void Coroutine::Free() { delete this; }
 
 // ThreadEnv class implementation
-ThreadEnv::ThreadEnv() : epoll_ctx_(new EpollCtx()) {}
+ThreadEnv::ThreadEnv() : epoll_ctx_(std::make_unique<EpollCtx>()) {}
 
 ThreadEnv::~ThreadEnv() {
-  if (epoll_ctx_) {
-    delete epoll_ctx_;
-  }
 }
 
 ThreadEnv *ThreadEnv::Current() { return gCoEnvPerThread; }
