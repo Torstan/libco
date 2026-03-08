@@ -72,9 +72,11 @@ int main(int argc, char *argv[]) {
                   sizeof(CGI_ENV_HOOK_LIST) / sizeof(char *));
   stRoutineArgs_t args[3];
   for (int i = 0; i < 3; i++) {
-    Coroutine *co = nullptr;
     args[i].iRoutineID = i;
-    co_create(&co, RoutineFunc, &args[i]);
+     Coroutine *co = co_create([p = &args[i]]() {
+        RoutineFunc(p);
+     });
+
     co_resume(co);
   }
   co_eventloop(nullptr, nullptr);

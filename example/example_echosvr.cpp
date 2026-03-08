@@ -162,13 +162,15 @@ public:
     for (int i = 0; i < co_cnt; i++) {
       task_t *task = (task_t *)calloc(1, sizeof(task_t));
       task->fd = -1;
-
-      co_create(&(task->co), readwrite_routine, task);
+      task->co = co_create([task]() {
+        readwrite_routine(task);
+      });
       co_resume(task->co);
     }
     {
-      Coroutine *co = nullptr;
-      co_create(&co, Worker::reap_fds_routine, this);
+      Coroutine *co = co_create([this]() {
+        reap_fds_routine(this);
+      });
       co_resume(co);
     }
     ThreadWorker tw(worker_id_);
@@ -180,7 +182,7 @@ public:
 std::vector<Worker *> g_workers;
 
 int co_accept(int fd, struct sockaddr *addr, socklen_t *len);
-static void *accept_routine(void *) {
+static void *accept_routine() {
   co_enable_hook_sys();
   printf("accept_routine\n");
   fflush(stdout);
@@ -280,8 +282,9 @@ int main(int argc, char *argv[]) {
     std::thread([w, cnt]() { w->run(cnt); }).detach();
   }
 
-  Coroutine *accept_co = nullptr;
-  co_create(&accept_co, accept_routine, 0);
+  Coroutine *accept_co = co_create([]() {
+    accept_routine();
+  });
   co_resume(accept_co);
 
   ThreadWorker main_worker(-1);

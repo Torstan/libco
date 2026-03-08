@@ -25,14 +25,6 @@ void ThreadWorker::switch_out(RoutineContext* ctx) {
     ctx->switch_out();
 }
 
-static void* coroutine_task_wrapper(void* arg) {
-    std::unique_ptr<Task> t(static_cast<Task*>(arg));
-    t->run();
-    active_coroutine_count--;
-    finished_coroutines.push_back(co_self());
-    return nullptr;
-}
-
 static void cleanup_finished_coroutines() {
     for (auto* co : finished_coroutines) {
         co_free(co);
@@ -42,11 +34,15 @@ static void cleanup_finished_coroutines() {
 
 static void spawn_pending_tasks() {
     while (!pending_tasks.empty()) {
-        auto task = std::move(pending_tasks.front());
+        std::unique_ptr<Task> task = std::move(pending_tasks.front());
         pending_tasks.pop_front();
         Task* raw = task.release();
-        Coroutine* co = nullptr;
-        co_create(&co, coroutine_task_wrapper, raw);
+        Coroutine* co = co_create([raw]() {
+            std::unique_ptr<Task> t(raw);
+            t->run();
+            active_coroutine_count--;
+            finished_coroutines.push_back(co_self());
+        });
         active_coroutine_count++;
         co_resume(co);
     }

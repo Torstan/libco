@@ -83,11 +83,11 @@ void PrintStat() {
   }
 }
 
-static void *readwrite_routine(void *arg) {
+static void *readwrite_routine(const stEndPoint& ep) {
 
   co_enable_hook_sys();
 
-  const stEndPoint *endpoint = (const stEndPoint *)arg;
+  const stEndPoint *endpoint = &ep;
   char str[8] = "sarlmol";
   char buf[1024 * 16];
   int fd = -1;
@@ -163,7 +163,9 @@ int main(int argc, char *argv[]) {
     std::thread *t = new std::thread([k, cnt, ep = endpoint]() {
       ThreadWorker worker(k);
       for (int i = 0; i < cnt; i++) {
-        Coroutine *co = Coroutine::Create(readwrite_routine, (void *)&ep);
+        Coroutine *co = co_create([ep]() {
+          readwrite_routine(ep);
+        });
         co->Resume();
       }
       worker.run_loop();

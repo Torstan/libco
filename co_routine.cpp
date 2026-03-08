@@ -45,17 +45,15 @@ available.
 #include <sys/syscall.h>
 #include <unistd.h>
 
-extern "C" {
-extern void coctx_swap(coctx_t *, coctx_t *) asm("coctx_swap");
-};
+
 using namespace std;
 
 static thread_local ThreadEnv *gCoEnvPerThread = nullptr;
 
 static int CoRoutineFunc(Coroutine *co, void *) { return co->Run(); }
 int Coroutine::Run() {
-  if (pfn_) {
-    pfn_(arg_);
+  if (func_) {
+    func_();
   }
   ended_ = true;
   co_yield_ct();
@@ -63,10 +61,10 @@ int Coroutine::Run() {
 }
 
 // Coroutine class implementation
-Coroutine::Coroutine(pfn_co_routine_t func, void *arg)
-    : pfn_(func), arg_(arg), started_(false), ended_(false), is_main_(false),
+Coroutine::Coroutine(std::function<void()>&& func)
+    : func_(std::move(func)), started_(false), ended_(false), is_main_(false),
       enable_sys_hook_(false), sys_envs_(nullptr), stack_mem_(nullptr) {
-  if (func) {
+  if (func_) {
     constexpr int stack_size = 256 * 1024;
     stack_mem_ = new StackMem(stack_size);
 
@@ -82,11 +80,11 @@ Coroutine::~Coroutine() {
   }
 }
 
-Coroutine *Coroutine::Create(pfn_co_routine_t func, void *arg) {
+Coroutine *Coroutine::Create(std::function<void()>&& func) {
   if (!ThreadEnv::Current()) {
     ThreadEnv::Init();
   }
-  return new Coroutine(func, arg);
+  return new Coroutine(std::move(func));
 }
 
 Coroutine *Coroutine::Self() {
@@ -124,7 +122,7 @@ void ThreadEnv::Init() {
   ThreadEnv *env = new ThreadEnv();
   gCoEnvPerThread = env;
 
-  Coroutine *self = new Coroutine(nullptr, nullptr);
+  Coroutine *self = new Coroutine([](){});
   self->SetMain();
   ThreadWorker::current_context = &self->routine_ctx_;
 }
