@@ -45,9 +45,6 @@ available.
 #include <sys/syscall.h>
 #include <unistd.h>
 
-
-using namespace std;
-
 static thread_local ThreadEnv *gCoEnvPerThread = nullptr;
 
 static int CoRoutineFunc(Coroutine *co, void *) { return co->Run(); }
@@ -85,10 +82,12 @@ Coroutine *Coroutine::Create(std::function<void()>&& func) {
 }
 
 Coroutine *Coroutine::Self() {
-  return ThreadWorker::current_context == nullptr
-             ? nullptr
-             : container_of(ThreadWorker::current_context, Coroutine,
-                            routine_ctx_);
+  if (!ThreadWorker::current_context)
+    return nullptr;
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Winvalid-offsetof"
+  return container_of(ThreadWorker::current_context, Coroutine, routine_ctx_);
+#pragma GCC diagnostic pop
 }
 
 void Coroutine::Yield() { routine_ctx_.switch_out(); }

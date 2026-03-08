@@ -20,7 +20,6 @@ available.
 #pragma once
 
 #include "co_stack.h"
-#include "coctx.h"
 #include "routine_context.h"
 #include "util.h"
 #include <stdint.h>
