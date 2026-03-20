@@ -6,6 +6,8 @@
 #include <exception>
 #include <type_traits>
 
+namespace co {
+
 template <typename T>
 class Future;
 
@@ -276,7 +278,7 @@ private:
     template <typename Func>
     void schedule(Func&& func) {
         if (state()->available()) {
-            ::schedule(std::make_unique<Continuation<Func, T>>(std::move(func), std::move(*state())));
+            co::schedule(std::make_unique<Continuation<Func, T>>(std::move(func), std::move(*state())));
         } else {
             assert(_promise);
             _promise->schedule(std::move(func));
@@ -365,9 +367,9 @@ inline void Promise<T>::make_ready() noexcept {
     if (_task) {
         _state = nullptr;
         if (urgent == Urgent::yes) {
-            ::schedule_urgent(std::move(_task));
+            co::schedule_urgent(std::move(_task));
         } else {
-            ::schedule(std::move(_task));
+            co::schedule(std::move(_task));
         }
     }
 }
@@ -403,3 +405,5 @@ template <typename T, typename Exception>
 inline Future<T> make_exception_future(Exception&& ex) noexcept {
     return make_exception_future<T>(std::make_exception_ptr(std::forward<Exception>(ex)));
 }
+
+} // namespace co

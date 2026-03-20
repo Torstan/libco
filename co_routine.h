@@ -27,6 +27,8 @@ available.
 #include <functional>
 #include <memory>
 
+namespace co {
+
 typedef int (*pfn_co_eventloop_t)(void *);
 
 class EpollCtx;
@@ -114,3 +116,5 @@ inline bool co_is_enable_sys_hook() {
   auto *c = Coroutine::Self();
   return c && c->IsHookEnabled();
 }
+
+} // namespace co

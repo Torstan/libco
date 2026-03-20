@@ -4,6 +4,8 @@
 #include <type_traits>
 #include <memory>
 
+namespace co {
+
 /// async: run a callable asynchronously via the task scheduler, return a Future<T>
 ///
 /// The callable is wrapped as a Task and scheduled for execution.
@@ -31,3 +33,5 @@ Future<T> async(Func&& func) {
     schedule(std::move(task));
     return future;
 }
+
+} // namespace co

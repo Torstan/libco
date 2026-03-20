@@ -4,6 +4,8 @@
 #include "co_routine.h"
 #include <stdlib.h>
 
+namespace co {
+
 static void OnSignalProcessEvent(TimeoutItem *item) {
   Coroutine *co = (Coroutine *)item->arg;
   co_resume(co);
@@ -62,3 +64,5 @@ int CoCond::Timedwait(int ms) {
   return 0;
 }
 CoCondItem *CoCond::Pop() { return pop_head(); }
+
+} // namespace co

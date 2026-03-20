@@ -3,6 +3,8 @@
 #include <cassert>
 #include <type_traits>
 
+namespace co {
+
 template <class T> class LinkedList;
 // A doubly-linked intrusive list.
 //
@@ -105,3 +107,5 @@ public:
     node->link = nullptr;
   }
 };
+
+} // namespace co

@@ -41,6 +41,7 @@ available.
 #include <unistd.h>
 
 using namespace std;
+using namespace co;
 struct stEndPoint {
   char *ip;
   unsigned short int port;

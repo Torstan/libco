@@ -20,6 +20,8 @@ available.
 #pragma once
 #include <stdlib.h>
 
+namespace co {
+
 typedef void *(*coctx_func_t)(void *s, void *s2);
 struct coctx_param_t {
   const void *s1;
@@ -38,3 +40,5 @@ struct coctx_t {
 
 int coctx_init(coctx_t *ctx);
 int coctx_make(coctx_t *ctx, coctx_func_t func, const void *s, const void *s1);
+
+} // namespace co

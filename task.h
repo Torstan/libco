@@ -2,6 +2,8 @@
 
 #include <memory>
 
+namespace co {
+
 class Task {
 public:
     virtual ~Task() = default;
@@ -28,3 +30,5 @@ template<typename Func>
 std::unique_ptr<Task> make_task(Func&& func) {
     return std::make_unique<LambdaTask<Func>>(std::forward<Func>(func));
 }
+
+} // namespace co

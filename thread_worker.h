@@ -1,6 +1,8 @@
 #pragma once
 #include "routine_context.h"
 
+namespace co {
+
 class ThreadWorker {
 public:
   explicit ThreadWorker(int idx);
@@ -12,3 +14,5 @@ public:
 private:
   int thread_idx;
 };
+
+} // namespace co

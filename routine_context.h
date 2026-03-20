@@ -2,6 +2,8 @@
 #include "coctx.h"
 #include <ucontext.h>
 
+namespace co {
+
 class RoutineContext {
 public:
   explicit RoutineContext();
@@ -20,3 +22,5 @@ private:
   RoutineContext *prev_link;
   RoutineContext *next_link;
 };
+
+} // namespace co

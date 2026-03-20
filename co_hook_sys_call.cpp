@@ -44,6 +44,8 @@ available.
 #include <map>
 #include <time.h>
 
+using namespace co;
+
 struct rpchook_t {
   int user_flag;
   struct sockaddr_in dest; // maybe sockaddr_un;
@@ -469,8 +471,10 @@ ssize_t recv(int socket, void *buffer, size_t length, int flags) {
   return readret;
 }
 
+namespace co {
 extern int co_poll_inner(struct pollfd fds[], nfds_t nfds, int timeout,
-                         poll_pfn_t pollfunc);
+                         int (*pollfunc)(struct pollfd[], nfds_t, int));
+} // namespace co
 
 int poll(struct pollfd fds[], nfds_t nfds, int timeout) {
   HOOK_SYS_FUNC(poll);
@@ -636,6 +640,7 @@ static int co_sysenv_comp(const void *a, const void *b) {
 }
 static stCoSysEnvArr_t g_co_sysenv = {0};
 
+namespace co {
 void co_set_env_list(const char *name[], size_t cnt) {
   if (g_co_sysenv.data) {
     return;
@@ -664,6 +669,7 @@ void co_set_env_list(const char *name[], size_t cnt) {
     g_co_sysenv.cnt = lp - g_co_sysenv.data + 1;
   }
 }
+} // namespace co
 
 int setenv(const char *n, const char *value, int overwrite) {
   HOOK_SYS_FUNC(setenv)
@@ -748,6 +754,7 @@ int __poll(struct pollfd fds[], nfds_t nfds, int timeout) {
 }
 }
 
+namespace co {
 void co_enable_hook_sys() // 这函数必须在这里,否则本文件会被忽略！！！
 {
   Coroutine *co = co_self();
@@ -755,3 +762,4 @@ void co_enable_hook_sys() // 这函数必须在这里,否则本文件会被忽�
     co->EnableHook();
   }
 }
+} // namespace co

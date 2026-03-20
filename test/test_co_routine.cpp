@@ -5,6 +5,8 @@
 #include "co_routine.h"
 #include <iostream>
 
+using namespace co;
+
 void *test_routine() {
   std::cout << "Coroutine started!" << std::endl;
   co_yield_ct();

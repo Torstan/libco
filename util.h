@@ -3,6 +3,8 @@
 #include <cstddef>
 #include <sys/time.h>
 
+namespace co {
+
 // container_of: given a pointer to a member, recover the containing object.
 // Uses standard offsetof from <cstddef> instead of custom definition.
 // Usage: container_of(ptr, Type, member_name)
@@ -21,3 +23,5 @@ inline unsigned long long GetTickUS() {
   return u;
 }
 inline unsigned long long GetTickMS() { return GetTickUS() / 1000; }
+
+} // namespace co

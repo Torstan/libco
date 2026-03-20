@@ -9,6 +9,8 @@
 #include <cassert>
 #include <string>
 
+using namespace co;
+
 static int test_passed = 0;
 static int test_failed = 0;
 

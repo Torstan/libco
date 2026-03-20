@@ -1,6 +1,8 @@
 #pragma once
 #include <stdlib.h>
 
+namespace co {
+
 class Coroutine;
 
 class StackMem {
@@ -21,3 +23,5 @@ public:
   }
   char *GetStackBuffer() const { return stack_buffer; }
 };
+
+} // namespace co
