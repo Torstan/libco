@@ -49,6 +49,7 @@ available.
 #endif
 
 using namespace std;
+using namespace co;
 struct task_t {
   Coroutine *co;
   int fd;

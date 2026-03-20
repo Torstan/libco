@@ -59,6 +59,8 @@ struct epoll_event {
 };
 #endif
 
+namespace co {
+
 // Forward declarations
 struct Timeout;
 struct TimeoutItemLink;
@@ -100,3 +102,5 @@ private:
   TimeoutItemLink *timeout_list_;
   co_epoll_res *result_;
 };
+
+} // namespace co

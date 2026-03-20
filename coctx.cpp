@@ -21,6 +21,8 @@ available.
 #include <stdio.h>
 #include <string.h>
 
+namespace co {
+
 #define ESP 0
 #define EIP 1
 #define EAX 2
@@ -130,3 +132,5 @@ int coctx_init(coctx_t *ctx) {
 }
 
 #endif
+
+} // namespace co

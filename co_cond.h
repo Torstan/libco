@@ -2,6 +2,8 @@
 #include "co_link.h"
 #include "co_timeout.h"
 
+namespace co {
+
 class CoCond;
 struct CoCondItem : public LinkItemBase<CoCondItem> {
   TimeoutItem timeout;
@@ -19,3 +21,5 @@ public:
 private:
   CoCondItem *Pop();
 };
+
+} // namespace co

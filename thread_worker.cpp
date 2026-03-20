@@ -4,6 +4,8 @@
 #include <queue>
 #include <vector>
 
+namespace co {
+
 thread_local RoutineContext *ThreadWorker::current_context(nullptr);
 static thread_local std::deque<std::unique_ptr<Task>> pending_tasks;
 static thread_local int active_coroutine_count = 0;
@@ -66,3 +68,5 @@ void schedule(std::unique_ptr<Task> t) {
 void schedule_urgent(std::unique_ptr<Task> t) {
     add_urgent_task(std::move(t));
 }
+
+} // namespace co

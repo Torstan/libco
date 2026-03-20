@@ -25,6 +25,8 @@ available.
 #include <string.h>
 #include <unistd.h>
 
+using namespace co;
+
 const char *CGI_ENV_HOOK_LIST[] = {
     "CGINAME",
 };

@@ -24,6 +24,8 @@ available.
 #include <stdlib.h>
 #include <string.h>
 
+namespace co {
+
 #if !defined(__APPLE__) && !defined(__FreeBSD__)
 
 static int co_epoll_wait(int epfd, struct co_epoll_res *events, int maxevents,
@@ -305,3 +307,5 @@ int EpollCtx::del(int fd, struct epoll_event *ev) {
 int EpollCtx::mod(int fd, struct epoll_event *ev) {
   return co_epoll_ctl(epoll_fd_, EPOLL_CTL_MOD, fd, ev);
 }
+
+} // namespace co

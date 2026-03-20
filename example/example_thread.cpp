@@ -25,6 +25,8 @@ available.
 #include <stdlib.h>
 #include <unistd.h>
 
+using namespace co;
+
 int loop(void *) { return 0; }
 static void *routine_func(void *) {
   co_eventloop(loop, 0);

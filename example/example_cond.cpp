@@ -24,6 +24,7 @@ available.
 #include <stdlib.h>
 #include <unistd.h>
 using namespace std;
+using namespace co;
 struct stTask_t {
   int id;
 };

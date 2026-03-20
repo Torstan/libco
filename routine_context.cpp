@@ -2,6 +2,8 @@
 #include "thread_worker.h"
 #include <assert.h>
 
+namespace co {
+
 extern "C" {
 extern void coctx_swap(coctx_t *, coctx_t *) asm("coctx_swap");
 };
@@ -63,3 +65,5 @@ void RoutineContext::switch_out() {
   coctx_swap(&prev->ctx, &next->ctx);
 #endif
 }
+
+} // namespace co

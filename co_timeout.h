@@ -4,6 +4,8 @@
 #include "util.h"
 #include <sys/epoll.h>
 
+namespace co {
+
 struct TimeoutItem;
 struct TimeoutItemLink;
 
@@ -84,3 +86,5 @@ public:
     start_idx += cnt - 1;
   }
 };
+
+} // namespace co

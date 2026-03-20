@@ -38,12 +38,15 @@ available.
 #include <assert.h>
 
 #include <arpa/inet.h>
+
 #include <fcntl.h>
 #include <limits.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <sys/syscall.h>
 #include <unistd.h>
+
+namespace co {
 
 static thread_local ThreadEnv *gCoEnvPerThread = nullptr;
 
@@ -354,3 +357,5 @@ EpollCtx *co_get_epoll_ct() {
   }
   return ThreadEnv::Current()->Epoll();
 }
+
+} // namespace co
