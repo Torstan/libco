@@ -23,6 +23,7 @@ available.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 namespace co {
 
@@ -286,7 +287,10 @@ EpollCtx::~EpollCtx() {
   delete timeout_list_;
   delete timeout_;
   co_epoll_res_free(result_);
-  // Note: epoll_fd_ is not closed to preserve original behavior
+  if (epoll_fd_ >= 0) {
+    close(epoll_fd_);
+    epoll_fd_ = -1;
+  }
 }
 
 int EpollCtx::wait(int timeout_ms) {

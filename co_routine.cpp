@@ -50,7 +50,11 @@ namespace co {
 
 static thread_local ThreadEnv *gCoEnvPerThread = nullptr;
 
-static int CoRoutineFunc(Coroutine *co, void *) { return co->Run(); }
+static int CoRoutineFunc(void *arg, void *) {
+  auto co = static_cast<Coroutine*>(arg);
+  return co->Run();
+}
+
 int Coroutine::Run() {
   if (func_) {
     func_();
