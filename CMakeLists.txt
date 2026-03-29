@@ -8,7 +8,7 @@ set(CMAKE_MACOSX_RPATH 0)
 set(LIBCO_VERSION   0.5)
 
 # Set cflags
-set(CMAKE_C_FLAGS ${CMAKE_C_FLAGS} -g -fno-strict-aliasing -O2 -Wall -export-dynamic -Wall -pipe  -D_GNU_SOURCE -D_REENTRANT -fPIC -Wno-deprecated -m64)
+set(CMAKE_C_FLAGS ${CMAKE_C_FLAGS} -g -fno-strict-aliasing --std=c++17 -O2 -Wall -Werror -export-dynamic -pipe  -D_GNU_SOURCE -D_REENTRANT -fPIC -Wno-deprecated -m64)
 
 # Use c and asm
 enable_language(C ASM)

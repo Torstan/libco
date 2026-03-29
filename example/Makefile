@@ -24,8 +24,8 @@ v=debug
 include ../co.mk
 
 ########## options ##########
-CFLAGS += -I../ -g -fno-strict-aliasing -O2 --std=c++17 -Wall -export-dynamic \
-	-Wall -pipe  -D_GNU_SOURCE -D_REENTRANT -fPIC -Wno-deprecated -m64
+CFLAGS += -I../ -g -fno-strict-aliasing -O2 --std=c++17 -Wall -Werror -export-dynamic \
+	-pipe  -D_GNU_SOURCE -D_REENTRANT -fPIC -Wno-deprecated -m64
 
 UNAME := $(shell uname -s)
 

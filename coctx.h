@@ -22,7 +22,7 @@ available.
 
 namespace co {
 
-typedef void *(*coctx_func_t)(void *s, void *s2);
+typedef int (*coctx_func_t)(void *s, void *s2);
 struct coctx_param_t {
   const void *s1;
   const void *s2;

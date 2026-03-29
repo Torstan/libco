@@ -27,13 +27,13 @@ CPP = $(CXX)
 AR = ar -rc
 RANLIB = ranlib
 
-CPPSHARE = $(CPP) -fPIC --std=c++17 -shared -O2 -pipe -L$(SRCROOT)/solib/ -o 
-CSHARE = $(CC) -fPIC --std=c++17 -shared -O2 -pipe -L$(SRCROOT)/solib/ -o 
+CPPSHARE = $(CPP) -fPIC --std=c++17 -shared -O2 -Wall -Werror -pipe -L$(SRCROOT)/solib/ -o 
+CSHARE = $(CC) -fPIC --std=c++17 -shared -O2 -Wall -Werror -pipe -L$(SRCROOT)/solib/ -o 
 
 ifeq ($v,release)
-CFLAGS= -O2 $(INCLS) -fPIC  -DLINUX -pipe -Wno-deprecated -c
+CFLAGS= $(INCLS) -fPIC --std=c++17 -O2 -Wall -Werror -DLINUX -pipe -Wno-deprecated -c
 else
-CFLAGS= -g $(INCLS) -fPIC -DLINUX -pipe -c -fno-inline
+CFLAGS= -g $(INCLS) -fPIC --std=c++17 -O2 -Wall -Werror -DLINUX -pipe -c -fno-inline
 endif
 
 ifneq ($v,release)
