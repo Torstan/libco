@@ -37,6 +37,7 @@ available.
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdexcept>
 #include <string.h>
 
 #include "co_routine.h"
@@ -120,6 +121,9 @@ static getenv_pfn_t g_sys_getenv_func =
 static __poll_pfn_t g_sys___poll_func =
     (__poll_pfn_t)dlsym(RTLD_NEXT, "__poll");
 
+static constexpr int kMaxHookFdCount =
+    sizeof(g_rpchook_socket_fd) / sizeof(g_rpchook_socket_fd[0]);
+
 #define HOOK_SYS_FUNC(name)                                                    \
   if (!g_sys_##name##_func) {                                                  \
     g_sys_##name##_func = (name##_pfn_t)dlsym(RTLD_NEXT, #name);               \
@@ -133,8 +137,7 @@ static inline rpchook_t *get_by_fd(int fd) {
   return nullptr;
 }
 static inline rpchook_t *alloc_by_fd(int fd) {
-  if (fd > -1 && fd < (int)sizeof(g_rpchook_socket_fd) /
-                          (int)sizeof(g_rpchook_socket_fd[0])) {
+  if (fd > -1 && fd < kMaxHookFdCount) {
     rpchook_t *lp = (rpchook_t *)calloc(1, sizeof(rpchook_t));
     lp->read_timeout.tv_sec = 1;
     lp->write_timeout.tv_sec = 1;
@@ -166,6 +169,10 @@ int socket(int domain, int type, int protocol) {
   }
 
   rpchook_t *lp = alloc_by_fd(fd);
+  if (lp == nullptr) {
+    errno = ENOMEM;
+    return -1;
+  }
   lp->domain = domain;
 
   fcntl(fd, F_SETFL, g_sys_fcntl_func(fd, F_GETFL, 0));
@@ -178,7 +185,20 @@ int co_accept(int fd, struct sockaddr *addr, socklen_t *len) {
   if (cli < 0) {
     return cli;
   }
-  alloc_by_fd(cli);
+
+  rpchook_t *lp = alloc_by_fd(cli);
+  if (lp == nullptr) {
+    errno = ENOMEM;
+    return -1;
+  }
+
+  if (rpchook_t *parent = get_by_fd(fd)) {
+    lp->domain = parent->domain;
+    lp->read_timeout = parent->read_timeout;
+    lp->write_timeout = parent->write_timeout;
+  }
+
+  fcntl(cli, F_SETFL, g_sys_fcntl_func(cli, F_GETFL, 0));
   return cli;
 }
 int connect(int fd, const struct sockaddr *address, socklen_t address_len) {
@@ -544,7 +564,8 @@ int fcntl(int fildes, int cmd, ...) {
   HOOK_SYS_FUNC(fcntl);
 
   if (fildes < 0) {
-    return __LINE__;
+    errno = EBADF;
+    return -1;
   }
 
   va_list arg_list;
@@ -558,6 +579,13 @@ int fcntl(int fildes, int cmd, ...) {
     ret = g_sys_fcntl_func(fildes, cmd, param);
     break;
   }
+#ifdef F_DUPFD_CLOEXEC
+  case F_DUPFD_CLOEXEC: {
+    int param = va_arg(arg_list, int);
+    ret = g_sys_fcntl_func(fildes, cmd, param);
+    break;
+  }
+#endif
   case F_GETFD: {
     ret = g_sys_fcntl_func(fildes, cmd);
     break;
@@ -595,6 +623,39 @@ int fcntl(int fildes, int cmd, ...) {
     ret = g_sys_fcntl_func(fildes, cmd, param);
     break;
   }
+#ifdef F_GETSIG
+  case F_GETSIG: {
+    ret = g_sys_fcntl_func(fildes, cmd);
+    break;
+  }
+#endif
+#ifdef F_SETSIG
+  case F_SETSIG: {
+    int param = va_arg(arg_list, int);
+    ret = g_sys_fcntl_func(fildes, cmd, param);
+    break;
+  }
+#endif
+#ifdef F_GETLEASE
+  case F_GETLEASE: {
+    ret = g_sys_fcntl_func(fildes, cmd);
+    break;
+  }
+#endif
+#ifdef F_SETLEASE
+  case F_SETLEASE: {
+    int param = va_arg(arg_list, int);
+    ret = g_sys_fcntl_func(fildes, cmd, param);
+    break;
+  }
+#endif
+#ifdef F_NOTIFY
+  case F_NOTIFY: {
+    int param = va_arg(arg_list, int);
+    ret = g_sys_fcntl_func(fildes, cmd, param);
+    break;
+  }
+#endif
   case F_GETLK: {
     struct flock *param = va_arg(arg_list, struct flock *);
     ret = g_sys_fcntl_func(fildes, cmd, param);
@@ -610,6 +671,99 @@ int fcntl(int fildes, int cmd, ...) {
     ret = g_sys_fcntl_func(fildes, cmd, param);
     break;
   }
+#ifdef F_OFD_GETLK
+  case F_OFD_GETLK: {
+    struct flock *param = va_arg(arg_list, struct flock *);
+    ret = g_sys_fcntl_func(fildes, cmd, param);
+    break;
+  }
+#endif
+#ifdef F_OFD_SETLK
+  case F_OFD_SETLK: {
+    struct flock *param = va_arg(arg_list, struct flock *);
+    ret = g_sys_fcntl_func(fildes, cmd, param);
+    break;
+  }
+#endif
+#ifdef F_OFD_SETLKW
+  case F_OFD_SETLKW: {
+    struct flock *param = va_arg(arg_list, struct flock *);
+    ret = g_sys_fcntl_func(fildes, cmd, param);
+    break;
+  }
+#endif
+#ifdef F_GETOWN_EX
+  case F_GETOWN_EX: {
+    struct f_owner_ex *param = va_arg(arg_list, struct f_owner_ex *);
+    ret = g_sys_fcntl_func(fildes, cmd, param);
+    break;
+  }
+#endif
+#ifdef F_SETOWN_EX
+  case F_SETOWN_EX: {
+    struct f_owner_ex *param = va_arg(arg_list, struct f_owner_ex *);
+    ret = g_sys_fcntl_func(fildes, cmd, param);
+    break;
+  }
+#endif
+#ifdef F_GETPIPE_SZ
+  case F_GETPIPE_SZ: {
+    ret = g_sys_fcntl_func(fildes, cmd);
+    break;
+  }
+#endif
+#ifdef F_SETPIPE_SZ
+  case F_SETPIPE_SZ: {
+    int param = va_arg(arg_list, int);
+    ret = g_sys_fcntl_func(fildes, cmd, param);
+    break;
+  }
+#endif
+#ifdef F_ADD_SEALS
+  case F_ADD_SEALS: {
+    int param = va_arg(arg_list, int);
+    ret = g_sys_fcntl_func(fildes, cmd, param);
+    break;
+  }
+#endif
+#ifdef F_GET_SEALS
+  case F_GET_SEALS: {
+    ret = g_sys_fcntl_func(fildes, cmd);
+    break;
+  }
+#endif
+#ifdef F_GET_RW_HINT
+  case F_GET_RW_HINT: {
+    uint64_t *param = va_arg(arg_list, uint64_t *);
+    ret = g_sys_fcntl_func(fildes, cmd, param);
+    break;
+  }
+#endif
+#ifdef F_SET_RW_HINT
+  case F_SET_RW_HINT: {
+    uint64_t *param = va_arg(arg_list, uint64_t *);
+    ret = g_sys_fcntl_func(fildes, cmd, param);
+    break;
+  }
+#endif
+#ifdef F_GET_FILE_RW_HINT
+  case F_GET_FILE_RW_HINT: {
+    uint64_t *param = va_arg(arg_list, uint64_t *);
+    ret = g_sys_fcntl_func(fildes, cmd, param);
+    break;
+  }
+#endif
+#ifdef F_SET_FILE_RW_HINT
+  case F_SET_FILE_RW_HINT: {
+    uint64_t *param = va_arg(arg_list, uint64_t *);
+    ret = g_sys_fcntl_func(fildes, cmd, param);
+    break;
+  }
+#endif
+  default:
+    errno = EINVAL;
+    ret = -1;
+    break;
   }
 
   va_end(arg_list);
@@ -634,6 +788,23 @@ static stCoSysEnvArr_t *dup_co_sysenv_arr(stCoSysEnvArr_t *arr) {
   }
   return lp;
 }
+
+namespace co {
+void co_cleanup_sys_envs(void *envs) {
+  stCoSysEnvArr_t *arr = (stCoSysEnvArr_t *)envs;
+  if (!arr) {
+    return;
+  }
+  for (size_t i = 0; i < arr->cnt; ++i) {
+    if (arr->data[i].value) {
+      free(arr->data[i].value);
+      arr->data[i].value = nullptr;
+    }
+  }
+  free(arr->data);
+  free(arr);
+}
+} // namespace co
 
 static int co_sysenv_comp(const void *a, const void *b) {
   return strcmp(((stCoSysEnv_t *)a)->name, ((stCoSysEnv_t *)b)->name);

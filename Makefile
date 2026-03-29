@@ -39,10 +39,12 @@ COLIB_OBJS=co_epoll.o co_cond.o thread_worker.o routine_context.o co_routine.o c
 
 all: colib examples tests
 
-examples:
-	cd example && make
-tests:
-	cd test && make
+.PHONY: all colib examples tests clean dist
+
+examples: libcolib.a
+	$(MAKE) -C example
+tests: libcolib.a
+	$(MAKE) -C test
 
 colib:libcolib.a libcolib.so
 
@@ -62,6 +64,5 @@ libco-$(version).src.tar.gz:
 clean:
 	$(CLEAN) *.o
 	rm -fr MANIFEST lib solib libco-$(version).src.tar.gz libco-$(version)
-	cd example && make clean
-	cd test && make clean
-
+	$(MAKE) -C example clean
+	$(MAKE) -C test clean
