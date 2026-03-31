@@ -8,10 +8,13 @@ set(CMAKE_MACOSX_RPATH 0)
 set(LIBCO_VERSION   0.5)
 
 # Set cflags
-set(CMAKE_C_FLAGS ${CMAKE_C_FLAGS} -g -fno-strict-aliasing --std=c++17 -O2 -Wall -Werror -export-dynamic -pipe  -D_GNU_SOURCE -D_REENTRANT -fPIC -Wno-deprecated -m64)
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -fno-strict-aliasing --std=c++17 -O2 -Wall -Werror -pipe -D_GNU_SOURCE -D_REENTRANT -fPIC -Wno-deprecated -m64")
+set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -export-dynamic")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -g -fno-strict-aliasing -O2 -Wall -Werror -pipe -D_GNU_SOURCE -D_REENTRANT -fPIC -m64")
+set(CMAKE_ASM_FLAGS "${CMAKE_ASM_FLAGS} -g")
 
-# Use c and asm
-enable_language(C ASM)
+# Use c, c++ and asm
+enable_language(CXX C ASM)
 
 # Add source files
 set(SOURCE_FILES

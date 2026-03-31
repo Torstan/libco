@@ -33,7 +33,7 @@ CSHARE = $(CC) -fPIC --std=c++17 -shared -O2 -Wall -Werror -pipe -L$(SRCROOT)/so
 ifeq ($v,release)
 CFLAGS= $(INCLS) -fPIC --std=c++17 -O2 -Wall -Werror -DLINUX -pipe -Wno-deprecated -c
 else
-CFLAGS= -g $(INCLS) -fPIC --std=c++17 -O2 -Wall -Werror -DLINUX -pipe -c -fno-inline
+CFLAGS= -g $(INCLS) -fPIC --std=c++17 -O0 -Wall -Werror -DLINUX -pipe -c -fno-inline
 endif
 
 ifneq ($v,release)
