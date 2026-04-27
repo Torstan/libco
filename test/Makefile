@@ -35,7 +35,7 @@ else
 LINKS += -g -L../lib -lcolib -lpthread -ldl
 endif
 
-PROGS = test_co_routine test_co_async
+PROGS = test_co_routine test_co_async test_co_poll
 
 all:$(PROGS)
 
@@ -45,6 +45,8 @@ test_co_routine:test_co_routine.o
 test_co_async:test_co_async.o
 	$(BUILDEXE)
 
+test_co_poll:test_co_poll.o
+	$(BUILDEXE)
 
 dist: clean
 
