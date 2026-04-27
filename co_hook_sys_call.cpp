@@ -526,11 +526,17 @@ int poll(struct pollfd fds[], nfds_t nfds, int timeout) {
   } else {
     ret = co_poll_inner(fds_merge, nfds_merge, timeout, g_sys_poll_func);
     if (ret > 0) {
+      ret = 0;
+      const short always_reported = POLLERR | POLLHUP | POLLNVAL;
       for (size_t i = 0; i < nfds; i++) {
         it = m.find(fds[i].fd);
         if (it != m.end()) {
           int j = it->second;
-          fds[i].revents = fds_merge[j].revents & fds[i].events;
+          fds[i].revents =
+              fds_merge[j].revents & (fds[i].events | always_reported);
+          if (fds[i].revents) {
+            ++ret;
+          }
         }
       }
     }
