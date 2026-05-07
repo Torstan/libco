@@ -107,7 +107,7 @@ void Coroutine::Resume() {
 }
 
 void Coroutine::Reset() {
-  if (!stack_mem_) {
+  if (is_main_ || !stack_mem_) {
     return;
   }
   started_ = false;
