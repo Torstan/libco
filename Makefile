@@ -39,12 +39,15 @@ COLIB_OBJS=co_epoll.o co_cond.o thread_worker.o routine_context.o co_routine.o c
 
 all: colib examples tests
 
-.PHONY: all colib examples tests clean dist
+.PHONY: all colib examples tests check clean dist
 
 examples: libcolib.a
 	$(MAKE) -C example
 tests: libcolib.a
 	$(MAKE) -C test
+
+check: tests
+	$(MAKE) -C test check
 
 colib:libcolib.a libcolib.so
 

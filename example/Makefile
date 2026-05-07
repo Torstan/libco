@@ -47,8 +47,6 @@ example_thread:example_thread.o
 	$(BUILDEXE)
 example_poll:example_poll.o
 	$(BUILDEXE)
-example_exit:example_exit.o
-	$(BUILDEXE)
 example_cond:example_cond.o
 	$(BUILDEXE)
 example_setenv:example_setenv.o

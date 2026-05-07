@@ -39,6 +39,8 @@ PROGS = test_co_routine test_co_async test_co_poll
 
 all:$(PROGS)
 
+.PHONY: all check clean dist
+
 test_co_routine:test_co_routine.o
 	$(BUILDEXE)
 
@@ -47,6 +49,9 @@ test_co_async:test_co_async.o
 
 test_co_poll:test_co_poll.o
 	$(BUILDEXE)
+
+check: all
+	@set -e; for prog in $(PROGS); do echo "RUN $$prog"; ./$$prog; done
 
 dist: clean
 

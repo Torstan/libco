@@ -16,11 +16,21 @@ set(CMAKE_ASM_FLAGS "${CMAKE_ASM_FLAGS} -g")
 # Use c, c++ and asm
 enable_language(CXX C ASM)
 
+set(LIBCO_PLATFORM_LIBS pthread)
+if(NOT APPLE)
+    list(APPEND LIBCO_PLATFORM_LIBS dl)
+endif()
+
+include_directories(${CMAKE_CURRENT_SOURCE_DIR})
+
 # Add source files
 set(SOURCE_FILES
         co_epoll.cpp
-        co_hook_sys_call.cpp
+        co_cond.cpp
+        thread_worker.cpp
+        routine_context.cpp
         co_routine.cpp
+        co_hook_sys_call.cpp
         coctx.cpp
         coctx_swap.S)
 
@@ -43,16 +53,25 @@ set_target_properties(colib_shared PROPERTIES VERSION ${LIBCO_VERSION} SOVERSION
 
 # Macro for add example target
 macro(add_example_target EXAMPLE_TARGET)
-    add_executable("example_${EXAMPLE_TARGET}" "example_${EXAMPLE_TARGET}.cpp")
-    target_link_libraries("example_${EXAMPLE_TARGET}" colib_static pthread dl)
+    add_executable("${EXAMPLE_TARGET}" "example/${EXAMPLE_TARGET}.cpp")
+    target_link_libraries("${EXAMPLE_TARGET}" colib_static ${LIBCO_PLATFORM_LIBS})
 endmacro(add_example_target)
 
-add_example_target(closure)
-add_example_target(cond)
-add_example_target(copystack)
-add_example_target(echocli)
-add_example_target(echosvr)
-add_example_target(poll)
-add_example_target(setenv)
-add_example_target(specific)
-add_example_target(thread)
+add_example_target(example_cond)
+add_example_target(example_echocli)
+add_example_target(example_echosvr)
+add_example_target(example_poll)
+add_example_target(example_setenv)
+add_example_target(example_thread)
+
+enable_testing()
+
+macro(add_libco_test TEST_TARGET)
+    add_executable("${TEST_TARGET}" "test/${TEST_TARGET}.cpp")
+    target_link_libraries("${TEST_TARGET}" colib_static ${LIBCO_PLATFORM_LIBS})
+    add_test(NAME "${TEST_TARGET}" COMMAND "${TEST_TARGET}")
+endmacro(add_libco_test)
+
+add_libco_test(test_co_routine)
+add_libco_test(test_co_async)
+add_libco_test(test_co_poll)
