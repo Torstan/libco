@@ -164,13 +164,18 @@ static constexpr nfds_t kStackPollItemCount = 2;
 
 class PollState {
  public:
-  PollState(EpollCtx *ep_ctx, nfds_t nfds, Coroutine *owner)
+  PollState(EpollCtx *ep_ctx, struct pollfd fds[], nfds_t nfds,
+            Coroutine *owner)
       : poll_(std::make_unique<PollBase>()) {
     poll_->epoll_fd = ep_ctx->fd();
     poll_->fds = new pollfd[nfds];
+    for (nfds_t i = 0; i < nfds; ++i) {
+      poll_->fds[i] = fds[i];
+      poll_->fds[i].revents = 0;
+    }
     poll_->nfds = nfds;
     poll_->poll_items =
-        nfds < kStackPollItemCount ? stack_items_ : new PollItem[nfds];
+        nfds <= kStackPollItemCount ? stack_items_ : new PollItem[nfds];
     poll_->process_func = PollProcessFunc;
     poll_->arg = owner;
   }
@@ -297,7 +302,7 @@ int co_poll_inner(struct pollfd fds[], nfds_t nfds, int timeout,
     timeout = INT_MAX;
   }
 
-  PollState state(ep_ctx, nfds, co_self());
+  PollState state(ep_ctx, fds, nfds, co_self());
   PollBase *poll = state.poll();
 
   int fallback_ret = 0;
@@ -327,7 +332,50 @@ int co_poll_inner(struct pollfd fds[], nfds_t nfds, int timeout,
 }
 
 int co_poll(struct pollfd fds[], nfds_t nfds, int timeout_ms) {
-  return co_poll_inner(fds, nfds, timeout_ms, nullptr);
+  if (nfds <= 1) {
+    return co_poll_inner(fds, nfds, timeout_ms, nullptr);
+  }
+
+  std::unique_ptr<pollfd[]> fds_merge(new pollfd[nfds]);
+  nfds_t nfds_merge = 0;
+  std::map<int, nfds_t> fd_to_merged_idx;
+  bool has_duplicate = false;
+  for (nfds_t i = 0; i < nfds; ++i) {
+    fds[i].revents = 0;
+    auto ret = fd_to_merged_idx.insert(std::make_pair(fds[i].fd, nfds_merge));
+    if (ret.second) {
+      fds_merge[nfds_merge] = fds[i];
+      fds_merge[nfds_merge].revents = 0;
+      ++nfds_merge;
+    } else {
+      fds_merge[ret.first->second].events |= fds[i].events;
+      has_duplicate = true;
+    }
+  }
+
+  if (!has_duplicate) {
+    return co_poll_inner(fds, nfds, timeout_ms, nullptr);
+  }
+
+  int ret = co_poll_inner(fds_merge.get(), nfds_merge, timeout_ms, nullptr);
+  if (ret <= 0) {
+    return ret;
+  }
+
+  ret = 0;
+  const short always_reported = POLLERR | POLLHUP | POLLNVAL;
+  for (nfds_t i = 0; i < nfds; ++i) {
+    auto it = fd_to_merged_idx.find(fds[i].fd);
+    if (it == fd_to_merged_idx.end()) {
+      continue;
+    }
+    fds[i].revents =
+        fds_merge[it->second].revents & (fds[i].events | always_reported);
+    if (fds[i].revents) {
+      ++ret;
+    }
+  }
+  return ret;
 }
 
 static void CollectReadyEvents(EpollCtx *ep_ctx, int event_count,

@@ -17,11 +17,10 @@ static void expect(bool condition, const char *message) {
   }
 }
 
-static void test_duplicate_poll_entries() {
+static void test_hooked_poll_duplicate_entries() {
   int pipefd[2];
   expect(pipe(pipefd) == 0, "pipe should succeed");
   if (failures) {
-    done = true;
     return;
   }
 
@@ -38,6 +37,32 @@ static void test_duplicate_poll_entries() {
 
   close(pipefd[0]);
   close(pipefd[1]);
+}
+
+static void test_direct_co_poll_duplicate_entries() {
+  int pipefd[2];
+  expect(pipe(pipefd) == 0, "pipe should succeed");
+  if (failures) {
+    return;
+  }
+
+  const char byte = 'x';
+  expect(write(pipefd[1], &byte, 1) == 1, "write should make pipe readable");
+
+  struct pollfd fds[2] = {{pipefd[0], POLLIN, 0}, {pipefd[0], POLLIN, 0}};
+  int ret = co_poll(fds, 2, 1000);
+
+  expect(ret == 2, "co_poll should count each ready duplicate entry");
+  expect((fds[0].revents & POLLIN) != 0, "first duplicate should be readable");
+  expect((fds[1].revents & POLLIN) != 0, "second duplicate should be readable");
+
+  close(pipefd[0]);
+  close(pipefd[1]);
+}
+
+static void test_duplicate_poll_entries() {
+  test_hooked_poll_duplicate_entries();
+  test_direct_co_poll_duplicate_entries();
   done = true;
 }
 
