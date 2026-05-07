@@ -181,4 +181,4 @@ int main(int argc, char *argv[]) {
   }
   return 0;
 }
-/*./example_echosvr 127.0.0.1 10000 100 50*/
+// ./example_echocli 127.0.0.1 1024 100 100
