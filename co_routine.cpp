@@ -447,6 +447,7 @@ void co_eventloop(pfn_co_eventloop_t func, void *arg) {
     }
   }
 }
+
 EpollCtx *co_get_epoll_ct() {
   if (!ThreadEnv::Current()) {
     ThreadEnv::Init();
