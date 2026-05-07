@@ -157,6 +157,53 @@ static inline void free_by_fd(int fd) {
   }
   return;
 }
+
+static inline int timeval_to_ms(const struct timeval &timeout) {
+  return (timeout.tv_sec * 1000) + (timeout.tv_usec / 1000);
+}
+
+static inline bool should_bypass_hook(int fd, rpchook_t **hook) {
+  if (!co_is_enable_sys_hook()) {
+    *hook = nullptr;
+    return true;
+  }
+  *hook = get_by_fd(fd);
+  return !*hook || ((*hook)->user_flag & O_NONBLOCK);
+}
+
+static int wait_for_fd(int fd, short events, int timeout_ms) {
+  struct pollfd pf = {0};
+  pf.fd = fd;
+  pf.events = events;
+  return poll(&pf, 1, timeout_ms);
+}
+
+template <typename WriteOnce>
+static ssize_t write_with_retry(int fd, const void *buffer, size_t length,
+                                int timeout_ms, WriteOnce write_once) {
+  size_t written = 0;
+  ssize_t write_ret =
+      write_once((const char *)buffer + written, length - written);
+  if (write_ret == 0) {
+    return write_ret;
+  }
+  if (write_ret > 0) {
+    written += write_ret;
+  }
+  while (written < length) {
+    wait_for_fd(fd, POLLOUT | POLLERR | POLLHUP, timeout_ms);
+    write_ret = write_once((const char *)buffer + written, length - written);
+    if (write_ret <= 0) {
+      break;
+    }
+    written += write_ret;
+  }
+  if (write_ret <= 0 && written == 0) {
+    return write_ret;
+  }
+  return written;
+}
+
 int socket(int domain, int type, int protocol) {
   HOOK_SYS_FUNC(socket);
 
@@ -278,23 +325,14 @@ int close(int fd) {
 ssize_t read(int fd, void *buf, size_t nbyte) {
   HOOK_SYS_FUNC(read);
 
-  if (!co_is_enable_sys_hook()) {
-    return g_sys_read_func(fd, buf, nbyte);
-  }
-  rpchook_t *lp = get_by_fd(fd);
-
-  if (!lp || (O_NONBLOCK & lp->user_flag)) {
+  rpchook_t *lp = nullptr;
+  if (should_bypass_hook(fd, &lp)) {
     ssize_t ret = g_sys_read_func(fd, buf, nbyte);
     return ret;
   }
-  int timeout =
-      (lp->read_timeout.tv_sec * 1000) + (lp->read_timeout.tv_usec / 1000);
+  int timeout = timeval_to_ms(lp->read_timeout);
 
-  struct pollfd pf = {0};
-  pf.fd = fd;
-  pf.events = (POLLIN | POLLERR | POLLHUP);
-
-  int pollret = poll(&pf, 1, timeout);
+  int pollret = wait_for_fd(fd, POLLIN | POLLERR | POLLHUP, timeout);
 
   ssize_t readret = g_sys_read_func(fd, (char *)buf, nbyte);
 
@@ -308,48 +346,17 @@ ssize_t read(int fd, void *buf, size_t nbyte) {
 ssize_t write(int fd, const void *buf, size_t nbyte) {
   HOOK_SYS_FUNC(write);
 
-  if (!co_is_enable_sys_hook()) {
-    return g_sys_write_func(fd, buf, nbyte);
-  }
-  rpchook_t *lp = get_by_fd(fd);
-
-  if (!lp || (O_NONBLOCK & lp->user_flag)) {
+  rpchook_t *lp = nullptr;
+  if (should_bypass_hook(fd, &lp)) {
     ssize_t ret = g_sys_write_func(fd, buf, nbyte);
     return ret;
   }
-  size_t wrotelen = 0;
-  int timeout =
-      (lp->write_timeout.tv_sec * 1000) + (lp->write_timeout.tv_usec / 1000);
+  int timeout = timeval_to_ms(lp->write_timeout);
 
-  ssize_t writeret =
-      g_sys_write_func(fd, (const char *)buf + wrotelen, nbyte - wrotelen);
-
-  if (writeret == 0) {
-    return writeret;
-  }
-
-  if (writeret > 0) {
-    wrotelen += writeret;
-  }
-  while (wrotelen < nbyte) {
-
-    struct pollfd pf = {0};
-    pf.fd = fd;
-    pf.events = (POLLOUT | POLLERR | POLLHUP);
-    poll(&pf, 1, timeout);
-
-    writeret =
-        g_sys_write_func(fd, (const char *)buf + wrotelen, nbyte - wrotelen);
-
-    if (writeret <= 0) {
-      break;
-    }
-    wrotelen += writeret;
-  }
-  if (writeret <= 0 && wrotelen == 0) {
-    return writeret;
-  }
-  return wrotelen;
+  return write_with_retry(fd, buf, nbyte, timeout,
+                          [fd](const char *buffer, size_t length) {
+                            return g_sys_write_func(fd, buffer, length);
+                          });
 }
 
 ssize_t sendto(int socket, const void *message, size_t length, int flags,
@@ -362,13 +369,9 @@ ssize_t sendto(int socket, const void *message, size_t length, int flags,
           5.try
   */
   HOOK_SYS_FUNC(sendto);
-  if (!co_is_enable_sys_hook()) {
-    return g_sys_sendto_func(socket, message, length, flags, dest_addr,
-                             dest_len);
-  }
 
-  rpchook_t *lp = get_by_fd(socket);
-  if (!lp || (O_NONBLOCK & lp->user_flag)) {
+  rpchook_t *lp = nullptr;
+  if (should_bypass_hook(socket, &lp)) {
     return g_sys_sendto_func(socket, message, length, flags, dest_addr,
                              dest_len);
   }
@@ -376,13 +379,9 @@ ssize_t sendto(int socket, const void *message, size_t length, int flags,
   ssize_t ret =
       g_sys_sendto_func(socket, message, length, flags, dest_addr, dest_len);
   if (ret < 0 && EAGAIN == errno) {
-    int timeout =
-        (lp->write_timeout.tv_sec * 1000) + (lp->write_timeout.tv_usec / 1000);
+    int timeout = timeval_to_ms(lp->write_timeout);
 
-    struct pollfd pf = {0};
-    pf.fd = socket;
-    pf.events = (POLLOUT | POLLERR | POLLHUP);
-    poll(&pf, 1, timeout);
+    wait_for_fd(socket, POLLOUT | POLLERR | POLLHUP, timeout);
 
     ret =
         g_sys_sendto_func(socket, message, length, flags, dest_addr, dest_len);
@@ -393,24 +392,16 @@ ssize_t sendto(int socket, const void *message, size_t length, int flags,
 ssize_t recvfrom(int socket, void *buffer, size_t length, int flags,
                  struct sockaddr *address, socklen_t *address_len) {
   HOOK_SYS_FUNC(recvfrom);
-  if (!co_is_enable_sys_hook()) {
+
+  rpchook_t *lp = nullptr;
+  if (should_bypass_hook(socket, &lp)) {
     return g_sys_recvfrom_func(socket, buffer, length, flags, address,
                                address_len);
   }
 
-  rpchook_t *lp = get_by_fd(socket);
-  if (!lp || (O_NONBLOCK & lp->user_flag)) {
-    return g_sys_recvfrom_func(socket, buffer, length, flags, address,
-                               address_len);
-  }
+  int timeout = timeval_to_ms(lp->read_timeout);
 
-  int timeout =
-      (lp->read_timeout.tv_sec * 1000) + (lp->read_timeout.tv_usec / 1000);
-
-  struct pollfd pf = {0};
-  pf.fd = socket;
-  pf.events = (POLLIN | POLLERR | POLLHUP);
-  poll(&pf, 1, timeout);
+  wait_for_fd(socket, POLLIN | POLLERR | POLLHUP, timeout);
 
   ssize_t ret =
       g_sys_recvfrom_func(socket, buffer, length, flags, address, address_len);
@@ -420,66 +411,29 @@ ssize_t recvfrom(int socket, void *buffer, size_t length, int flags,
 ssize_t send(int socket, const void *buffer, size_t length, int flags) {
   HOOK_SYS_FUNC(send);
 
-  if (!co_is_enable_sys_hook()) {
+  rpchook_t *lp = nullptr;
+  if (should_bypass_hook(socket, &lp)) {
     return g_sys_send_func(socket, buffer, length, flags);
   }
-  rpchook_t *lp = get_by_fd(socket);
+  int timeout = timeval_to_ms(lp->write_timeout);
 
-  if (!lp || (O_NONBLOCK & lp->user_flag)) {
-    return g_sys_send_func(socket, buffer, length, flags);
-  }
-  size_t wrotelen = 0;
-  int timeout =
-      (lp->write_timeout.tv_sec * 1000) + (lp->write_timeout.tv_usec / 1000);
-
-  ssize_t writeret = g_sys_send_func(socket, buffer, length, flags);
-  if (writeret == 0) {
-    return writeret;
-  }
-
-  if (writeret > 0) {
-    wrotelen += writeret;
-  }
-  while (wrotelen < length) {
-
-    struct pollfd pf = {0};
-    pf.fd = socket;
-    pf.events = (POLLOUT | POLLERR | POLLHUP);
-    poll(&pf, 1, timeout);
-
-    writeret = g_sys_send_func(socket, (const char *)buffer + wrotelen,
-                               length - wrotelen, flags);
-
-    if (writeret <= 0) {
-      break;
-    }
-    wrotelen += writeret;
-  }
-  if (writeret <= 0 && wrotelen == 0) {
-    return writeret;
-  }
-  return wrotelen;
+  return write_with_retry(socket, buffer, length, timeout,
+                          [socket, flags](const char *buffer, size_t length) {
+                            return g_sys_send_func(socket, buffer, length,
+                                                   flags);
+                          });
 }
 
 ssize_t recv(int socket, void *buffer, size_t length, int flags) {
   HOOK_SYS_FUNC(recv);
 
-  if (!co_is_enable_sys_hook()) {
+  rpchook_t *lp = nullptr;
+  if (should_bypass_hook(socket, &lp)) {
     return g_sys_recv_func(socket, buffer, length, flags);
   }
-  rpchook_t *lp = get_by_fd(socket);
+  int timeout = timeval_to_ms(lp->read_timeout);
 
-  if (!lp || (O_NONBLOCK & lp->user_flag)) {
-    return g_sys_recv_func(socket, buffer, length, flags);
-  }
-  int timeout =
-      (lp->read_timeout.tv_sec * 1000) + (lp->read_timeout.tv_usec / 1000);
-
-  struct pollfd pf = {0};
-  pf.fd = socket;
-  pf.events = (POLLIN | POLLERR | POLLHUP);
-
-  int pollret = poll(&pf, 1, timeout);
+  int pollret = wait_for_fd(socket, POLLIN | POLLERR | POLLHUP, timeout);
 
   ssize_t readret = g_sys_recv_func(socket, buffer, length, flags);
 
@@ -566,6 +520,26 @@ int setsockopt(int fd, int level, int option_name, const void *option_value,
                                option_len);
 }
 
+static int handle_f_getfl(int fd, rpchook_t *hook) {
+  int ret = g_sys_fcntl_func(fd, F_GETFL);
+  if (hook && !(hook->user_flag & O_NONBLOCK)) {
+    ret = ret & (~O_NONBLOCK);
+  }
+  return ret;
+}
+
+static int handle_f_setfl(int fd, int param, rpchook_t *hook) {
+  int flag = param;
+  if (co_is_enable_sys_hook() && hook) {
+    flag |= O_NONBLOCK;
+  }
+  int ret = g_sys_fcntl_func(fd, F_SETFL, flag);
+  if (ret == 0 && hook) {
+    hook->user_flag = param;
+  }
+  return ret;
+}
+
 int fcntl(int fildes, int cmd, ...) {
   HOOK_SYS_FUNC(fcntl);
 
@@ -602,22 +576,12 @@ int fcntl(int fildes, int cmd, ...) {
     break;
   }
   case F_GETFL: {
-    ret = g_sys_fcntl_func(fildes, cmd);
-    if (lp && !(lp->user_flag & O_NONBLOCK)) {
-      ret = ret & (~O_NONBLOCK);
-    }
+    ret = handle_f_getfl(fildes, lp);
     break;
   }
   case F_SETFL: {
     int param = va_arg(arg_list, int);
-    int flag = param;
-    if (co_is_enable_sys_hook() && lp) {
-      flag |= O_NONBLOCK;
-    }
-    ret = g_sys_fcntl_func(fildes, cmd, flag);
-    if (0 == ret && lp) {
-      lp->user_flag = param;
-    }
+    ret = handle_f_setfl(fildes, param, lp);
     break;
   }
   case F_GETOWN: {
@@ -817,6 +781,26 @@ static int co_sysenv_comp(const void *a, const void *b) {
 }
 static stCoSysEnvArr_t g_co_sysenv = {0};
 
+static stCoSysEnv_t *find_coroutine_env(const char *name, bool create) {
+  if (!co_is_enable_sys_hook() || !g_co_sysenv.data) {
+    return nullptr;
+  }
+  Coroutine *self = co_self();
+  if (!self) {
+    return nullptr;
+  }
+  if (create && !self->GetSysEnvs()) {
+    self->GetSysEnvs() = dup_co_sysenv_arr(&g_co_sysenv);
+  }
+  if (!self->GetSysEnvs()) {
+    return nullptr;
+  }
+  stCoSysEnvArr_t *arr = (stCoSysEnvArr_t *)(self->GetSysEnvs());
+  stCoSysEnv_t key = {(char *)name, 0};
+  return (stCoSysEnv_t *)bsearch(&key, arr->data, arr->cnt, sizeof(key),
+                                 co_sysenv_comp);
+}
+
 namespace co {
 void co_set_env_list(const char *name[], size_t cnt) {
   if (g_co_sysenv.data) {
@@ -850,77 +834,36 @@ void co_set_env_list(const char *name[], size_t cnt) {
 
 int setenv(const char *n, const char *value, int overwrite) {
   HOOK_SYS_FUNC(setenv)
-  if (co_is_enable_sys_hook() && g_co_sysenv.data) {
-    Coroutine *self = co_self();
-    if (self) {
-      if (!self->GetSysEnvs()) {
-        self->GetSysEnvs() = dup_co_sysenv_arr(&g_co_sysenv);
-      }
-      stCoSysEnvArr_t *arr = (stCoSysEnvArr_t *)(self->GetSysEnvs());
-
-      stCoSysEnv_t name = {(char *)n, 0};
-
-      stCoSysEnv_t *e = (stCoSysEnv_t *)bsearch(&name, arr->data, arr->cnt,
-                                                sizeof(name), co_sysenv_comp);
-
-      if (e) {
-        if (overwrite || !e->value) {
-          if (e->value)
-            free(e->value);
-          assert(value != nullptr);
-          e->value = strdup(value);
-          // e->value = value != nullptr ? strdup( value ) : nullptr;
-        }
-        return 0;
-      }
+  stCoSysEnv_t *e = find_coroutine_env(n, true);
+  if (e) {
+    if (overwrite || !e->value) {
+      if (e->value)
+        free(e->value);
+      assert(value != nullptr);
+      e->value = strdup(value);
+      // e->value = value != nullptr ? strdup( value ) : nullptr;
     }
+    return 0;
   }
   return g_sys_setenv_func(n, value, overwrite);
 }
 int unsetenv(const char *n) {
   HOOK_SYS_FUNC(unsetenv)
-  if (co_is_enable_sys_hook() && g_co_sysenv.data) {
-    Coroutine *self = co_self();
-    if (self) {
-      if (!self->GetSysEnvs()) {
-        self->GetSysEnvs() = dup_co_sysenv_arr(&g_co_sysenv);
-      }
-      stCoSysEnvArr_t *arr = (stCoSysEnvArr_t *)(self->GetSysEnvs());
-
-      stCoSysEnv_t name = {(char *)n, 0};
-
-      stCoSysEnv_t *e = (stCoSysEnv_t *)bsearch(&name, arr->data, arr->cnt,
-                                                sizeof(name), co_sysenv_comp);
-
-      if (e) {
-        if (e->value) {
-          free(e->value);
-          e->value = 0;
-        }
-        return 0;
-      }
+  stCoSysEnv_t *e = find_coroutine_env(n, true);
+  if (e) {
+    if (e->value) {
+      free(e->value);
+      e->value = 0;
     }
+    return 0;
   }
   return g_sys_unsetenv_func(n);
 }
 char *getenv(const char *n) {
   HOOK_SYS_FUNC(getenv)
-  if (co_is_enable_sys_hook() && g_co_sysenv.data) {
-    Coroutine *self = co_self();
-
-    stCoSysEnv_t name = {(char *)n, 0};
-
-    if (!self->GetSysEnvs()) {
-      self->GetSysEnvs() = dup_co_sysenv_arr(&g_co_sysenv);
-    }
-    stCoSysEnvArr_t *arr = (stCoSysEnvArr_t *)(self->GetSysEnvs());
-
-    stCoSysEnv_t *e = (stCoSysEnv_t *)bsearch(&name, arr->data, arr->cnt,
-                                              sizeof(name), co_sysenv_comp);
-
-    if (e) {
-      return e->value;
-    }
+  stCoSysEnv_t *e = find_coroutine_env(n, true);
+  if (e) {
+    return e->value;
   }
   return g_sys_getenv_func(n);
 }
