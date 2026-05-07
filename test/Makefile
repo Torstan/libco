@@ -35,7 +35,7 @@ else
 LINKS += -g -L../lib -lcolib -lpthread -ldl
 endif
 
-PROGS = test_co_routine test_co_async test_co_poll
+PROGS = test_co_routine test_co_async test_co_poll test_public_api
 
 all:$(PROGS)
 
@@ -50,6 +50,9 @@ test_co_async:test_co_async.o
 test_co_poll:test_co_poll.o
 	$(BUILDEXE)
 
+test_public_api:test_public_api.o
+	$(BUILDEXE)
+
 check: all
 	@set -e; for prog in $(PROGS); do echo "RUN $$prog"; ./$$prog; done
 
@@ -57,4 +60,3 @@ dist: clean
 
 clean:
 	$(CLEAN) *.o $(PROGS)
-

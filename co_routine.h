@@ -24,6 +24,7 @@ available.
 #include "util.h"
 #include <stdint.h>
 #include <sys/poll.h>
+#include <sys/socket.h>
 #include <functional>
 #include <memory>
 
@@ -95,6 +96,7 @@ void co_enable_hook_sys();
 void co_set_env_list(const char *name[], size_t cnt);
 
 int co_poll(struct pollfd fds[], nfds_t nfds, int timeout_ms);
+int co_accept(int fd, struct sockaddr *addr, socklen_t *len);
 void co_eventloop(pfn_co_eventloop_t func, void *arg);
 
 inline Coroutine* co_create(std::function<void()>&& func) {

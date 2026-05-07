@@ -182,7 +182,6 @@ public:
 };
 std::vector<Worker *> g_workers;
 
-int co_accept(int fd, struct sockaddr *addr, socklen_t *len);
 static void *accept_routine() {
   co_enable_hook_sys();
   printf("accept_routine\n");

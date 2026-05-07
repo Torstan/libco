@@ -46,9 +46,12 @@ available.
 #include <sys/syscall.h>
 #include <unistd.h>
 
+int co_accept(int fd, struct sockaddr *addr, socklen_t *len);
+
 namespace co {
 
 static thread_local ThreadEnv *gCoEnvPerThread = nullptr;
+static constexpr int kDefaultStackSize = 256 * 1024;
 
 static int CoRoutineFunc(void *arg, void *) {
   auto co = static_cast<Coroutine*>(arg);
@@ -69,9 +72,8 @@ Coroutine::Coroutine(std::function<void()>&& func)
     : func_(std::move(func)), started_(false), ended_(false), is_main_(false),
       enable_sys_hook_(false), sys_envs_(nullptr), stack_mem_(nullptr) {
   if (func_) {
-    constexpr int stack_size = 256 * 1024;
-    stack_mem_ = std::make_unique<StackMem>(stack_size);
-    routine_ctx_.InitCtx(stack_mem_->GetStackBuffer(), stack_size);
+    stack_mem_ = std::make_unique<StackMem>(kDefaultStackSize);
+    routine_ctx_.InitCtx(stack_mem_->GetStackBuffer(), kDefaultStackSize);
   }
 }
 
@@ -104,7 +106,20 @@ void Coroutine::Resume() {
   routine_ctx_.switch_in();
 }
 
+void Coroutine::Reset() {
+  if (!stack_mem_) {
+    return;
+  }
+  started_ = false;
+  ended_ = false;
+  routine_ctx_.InitCtx(stack_mem_->GetStackBuffer(), kDefaultStackSize);
+}
+
 void Coroutine::Free() { delete this; }
+
+int co_accept(int fd, struct sockaddr *addr, socklen_t *len) {
+  return ::co_accept(fd, addr, len);
+}
 
 // ThreadEnv class implementation
 ThreadEnv::ThreadEnv() : epoll_ctx_(std::make_unique<EpollCtx>()) {}
