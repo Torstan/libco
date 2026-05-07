@@ -155,6 +155,41 @@ struct PollItem : public TimeoutItem {
 
   struct epoll_event ep_event;
 };
+
+typedef int (*poll_func_t)(struct pollfd fds[], nfds_t nfds, int timeout);
+
+static void PollProcessFunc(TimeoutItem *item);
+
+static constexpr nfds_t kStackPollItemCount = 2;
+
+class PollState {
+ public:
+  PollState(EpollCtx *ep_ctx, nfds_t nfds, Coroutine *owner)
+      : poll_(std::make_unique<PollBase>()) {
+    poll_->epoll_fd = ep_ctx->fd();
+    poll_->fds = new pollfd[nfds];
+    poll_->nfds = nfds;
+    poll_->poll_items =
+        nfds < kStackPollItemCount ? stack_items_ : new PollItem[nfds];
+    poll_->process_func = PollProcessFunc;
+    poll_->arg = owner;
+  }
+
+  ~PollState() {
+    if (poll_->poll_items != stack_items_) {
+      delete[] poll_->poll_items;
+      poll_->poll_items = nullptr;
+    }
+    delete[] poll_->fds;
+    poll_->fds = nullptr;
+  }
+
+  PollBase *poll() { return poll_.get(); }
+
+ private:
+  std::unique_ptr<PollBase> poll_;
+  PollItem stack_items_[kStackPollItemCount];
+};
 /*
  *   EPOLLPRI 		POLLPRI    // There is urgent data to read.
  *   EPOLLMSG 		POLLMSG
@@ -216,7 +251,42 @@ static void PollPrepareFunc(TimeoutItem *timeout_item, struct epoll_event &e,
   }
 }
 
-typedef int (*poll_func_t)(struct pollfd fds[], nfds_t nfds, int timeout);
+static bool RegisterPollFds(EpollCtx *ep_ctx, struct pollfd fds[], nfds_t nfds,
+                            int timeout, poll_func_t poll_func,
+                            PollBase *poll, int *fallback_ret) {
+  for (nfds_t i = 0; i < nfds; i++) {
+    poll->poll_items[i].self_pfd = poll->fds + i;
+    poll->poll_items[i].poll = poll;
+
+    poll->poll_items[i].prepare_func = PollPrepareFunc;
+    struct epoll_event &ev = poll->poll_items[i].ep_event;
+
+    if (fds[i].fd > -1) {
+      ev.data.ptr = poll->poll_items + i;
+      ev.events = PollEvent2Epoll(fds[i].events);
+
+      int ret = ep_ctx->add(fds[i].fd, &ev);
+      if (ret < 0 && errno == EPERM && nfds == 1 && poll_func != nullptr) {
+        *fallback_ret = poll_func(fds, nfds, timeout);
+        return false;
+      }
+    }
+    // if fail,the timeout would work
+  }
+  return true;
+}
+
+static void CleanupPoll(EpollCtx *ep_ctx, struct pollfd fds[], PollBase *poll) {
+  TimeoutItemLink::remove(poll);
+  for (nfds_t i = 0; i < poll->nfds; i++) {
+    int fd = fds[i].fd;
+    if (fd > -1) {
+      ep_ctx->del(fd, &poll->poll_items[i].ep_event);
+    }
+    fds[i].revents = poll->fds[i].revents;
+  }
+}
+
 int co_poll_inner(struct pollfd fds[], nfds_t nfds, int timeout,
                   poll_func_t poll_func) {
   EpollCtx *ep_ctx = co_get_epoll_ct();
@@ -226,93 +296,83 @@ int co_poll_inner(struct pollfd fds[], nfds_t nfds, int timeout,
   if (timeout < 0) {
     timeout = INT_MAX;
   }
-  int epfd = ep_ctx->fd();
 
-  // 1.struct change
-  PollBase *pb = new PollBase();
-  PollBase &arg = *pb;
+  PollState state(ep_ctx, nfds, co_self());
+  PollBase *poll = state.poll();
 
-  arg.epoll_fd = epfd;
-  arg.fds = new pollfd[nfds];
-  arg.nfds = nfds;
-
-  PollItem arr[2];
-  if (nfds < sizeof(arr) / sizeof(arr[0])) {
-    arg.poll_items = arr;
-  } else {
-    arg.poll_items = new PollItem[nfds];
+  int fallback_ret = 0;
+  if (!RegisterPollFds(ep_ctx, fds, nfds, timeout, poll_func, poll,
+                       &fallback_ret)) {
+    return fallback_ret;
   }
 
-  arg.process_func = PollProcessFunc;
-  arg.arg = co_self();
-
-  // 2. add epoll
-  for (nfds_t i = 0; i < nfds; i++) {
-    arg.poll_items[i].self_pfd = arg.fds + i;
-    arg.poll_items[i].poll = &arg;
-
-    arg.poll_items[i].prepare_func = PollPrepareFunc;
-    struct epoll_event &ev = arg.poll_items[i].ep_event;
-
-    if (fds[i].fd > -1) {
-      ev.data.ptr = arg.poll_items + i;
-      ev.events = PollEvent2Epoll(fds[i].events);
-
-      int ret = ep_ctx->add(fds[i].fd, &ev);
-      if (ret < 0 && errno == EPERM && nfds == 1 && poll_func != nullptr) {
-        if (arg.poll_items != arr) {
-          delete[] (arg.poll_items);
-          arg.poll_items = nullptr;
-        }
-        delete[] (arg.fds);
-        delete (&arg);
-        return poll_func(fds, nfds, timeout);
-      }
-    }
-    // if fail,the timeout would work
-  }
-
-  // 3.add timeout
   unsigned long long now = GetTickMS();
-  arg.expire_time_ms = now + timeout;
-  int ret = ep_ctx->timeout()->AddItem(&arg, now);
+  poll->expire_time_ms = now + timeout;
+  int ret = ep_ctx->timeout()->AddItem(poll, now);
   int raise_cnt = 0;
   if (ret != 0) {
     co_log_err(
         "CO_ERR: AddItem ret %d now %lld timeout %d arg.expire_time_ms %lld",
-        ret, now, timeout, arg.expire_time_ms);
+        ret, now, timeout, poll->expire_time_ms);
     errno = EINVAL;
     raise_cnt = -1;
 
   } else {
     co_yield_ct();
-    raise_cnt = arg.raise_cnt;
+    raise_cnt = poll->raise_cnt;
   }
 
-  {
-    // clear epoll status and memory
-    TimeoutItemLink::remove(&arg);
-    for (nfds_t i = 0; i < nfds; i++) {
-      int fd = fds[i].fd;
-      if (fd > -1) {
-        ep_ctx->del(fd, &arg.poll_items[i].ep_event);
-      }
-      fds[i].revents = arg.fds[i].revents;
-    }
-
-    if (arg.poll_items != arr) {
-      delete[] (arg.poll_items);
-      arg.poll_items = nullptr;
-    }
-
-    delete[] (arg.fds);
-    delete (&arg);
-  }
+  CleanupPoll(ep_ctx, fds, poll);
   return raise_cnt;
 }
 
 int co_poll(struct pollfd fds[], nfds_t nfds, int timeout_ms) {
   return co_poll_inner(fds, nfds, timeout_ms, nullptr);
+}
+
+static void CollectReadyEvents(EpollCtx *ep_ctx, int event_count,
+                               TimeoutItemLink *active) {
+  for (int i = 0; i < event_count; i++) {
+    epoll_event &ev = ep_ctx->events()->events[i];
+    TimeoutItem *item = (TimeoutItem *)ev.data.ptr;
+    if (item->prepare_func) {
+      item->prepare_func(item, ev, active);
+    } else {
+      active->add_tail(item);
+    }
+  }
+}
+
+static void CollectTimeouts(EpollCtx *ep_ctx, unsigned long long now,
+                            TimeoutItemLink *timeout) {
+  ep_ctx->timeout()->TakeAll(now, timeout);
+
+  TimeoutItem *item = timeout->head;
+  while (item) {
+    item->timeout = true;
+    item = item->next;
+  }
+}
+
+static void DispatchActiveItems(EpollCtx *ep_ctx, unsigned long long now,
+                                TimeoutItemLink *active) {
+  TimeoutItem *item = active->head;
+  while (item) {
+    active->pop_head();
+    if (item->timeout && now < item->expire_time_ms) {
+      int ret = ep_ctx->timeout()->AddItem(item, now);
+      if (!ret) {
+        item->timeout = false;
+        item = active->head;
+        continue;
+      }
+    }
+    if (item->process_func) {
+      item->process_func(item);
+    }
+
+    item = active->head;
+  }
 }
 
 void co_eventloop(pfn_co_eventloop_t func, void *arg) {
@@ -324,45 +384,14 @@ void co_eventloop(pfn_co_eventloop_t func, void *arg) {
     TimeoutItemLink *timeout = ep_ctx->timeout_list();
     timeout->clear();
 
-    for (int i = 0; i < ret; i++) {
-      epoll_event &ev = ep_ctx->events()->events[i];
-      TimeoutItem *item = (TimeoutItem *)ev.data.ptr;
-      if (item->prepare_func) {
-        item->prepare_func(item, ev, active);
-      } else {
-        active->add_tail(item);
-      }
-    }
+    CollectReadyEvents(ep_ctx, ret, active);
 
     unsigned long long now = GetTickMS();
-    ep_ctx->timeout()->TakeAll(now, timeout);
-
-    TimeoutItem *item = timeout->head;
-    while (item) {
-      // printf("raise timeout %p\n", item);
-      item->timeout = true;
-      item = item->next;
-    }
+    CollectTimeouts(ep_ctx, now, timeout);
 
     active->join(*timeout);
+    DispatchActiveItems(ep_ctx, now, active);
 
-    item = active->head;
-    while (item) {
-      active->pop_head();
-      if (item->timeout && now < item->expire_time_ms) {
-        int ret = ep_ctx->timeout()->AddItem(item, now);
-        if (!ret) {
-          item->timeout = false;
-          item = active->head;
-          continue;
-        }
-      }
-      if (item->process_func) {
-        item->process_func(item);
-      }
-
-      item = active->head;
-    }
     if (func) {
       if (-1 == func(arg)) {
         break;
