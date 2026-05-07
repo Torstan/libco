@@ -87,11 +87,13 @@ enum {
 extern "C" {
 extern void coctx_swap(coctx_t *, coctx_t *) asm("coctx_swap");
 };
-#if defined(__i386__)
+
 int coctx_init(coctx_t *ctx) {
   memset(ctx, 0, sizeof(*ctx));
   return 0;
 }
+
+#if defined(__i386__)
 int coctx_make(coctx_t *ctx, coctx_func_t func, const void *s, const void *s1) {
   // make room for coctx_param
   char *sp = ctx->ss_sp + ctx->ss_size - sizeof(coctx_param_t);
@@ -123,11 +125,6 @@ int coctx_make(coctx_t *ctx, coctx_func_t func, const void *s, const void *s1) {
 
   ctx->regs[kRDI] = (char *)s;
   ctx->regs[kRSI] = (char *)s1;
-  return 0;
-}
-
-int coctx_init(coctx_t *ctx) {
-  memset(ctx, 0, sizeof(*ctx));
   return 0;
 }
 

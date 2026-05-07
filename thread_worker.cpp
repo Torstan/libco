@@ -34,19 +34,27 @@ static void cleanup_finished_coroutines() {
     finished_coroutines.clear();
 }
 
+static void run_task_and_mark_finished(std::unique_ptr<Task> task) {
+    task->run();
+    active_coroutine_count--;
+    finished_coroutines.push_back(co_self());
+}
+
+static Coroutine* create_task_coroutine(std::unique_ptr<Task> task) {
+    Task* task_ptr = task.release();
+    return co_create([task_ptr]() {
+        std::unique_ptr<Task> owned_task(task_ptr);
+        run_task_and_mark_finished(std::move(owned_task));
+    });
+}
+
 static void spawn_pending_tasks() {
     while (!pending_tasks.empty()) {
         std::unique_ptr<Task> task = std::move(pending_tasks.front());
         pending_tasks.pop_front();
-        Task* raw = task.release();
-        Coroutine* co = co_create([raw]() {
-            std::unique_ptr<Task> t(raw);
-            t->run();
-            active_coroutine_count--;
-            finished_coroutines.push_back(co_self());
-        });
+        Coroutine* coroutine = create_task_coroutine(std::move(task));
         active_coroutine_count++;
-        co_resume(co);
+        co_resume(coroutine);
     }
 }
 

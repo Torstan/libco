@@ -11,32 +11,31 @@ static void OnSignalProcessEvent(TimeoutItem *item) {
   co_resume(co);
 }
 
+static void ActivateWaiter(CoCondItem *cond_item) {
+  TimeoutItemLink::remove(&cond_item->timeout);
+  co_get_curr_thread_env()->Epoll()->active_list()->add_tail(
+      &cond_item->timeout);
+}
+
 int CoCond::Signal() {
   CoCondItem *cond_item = Pop();
   if (!cond_item) {
     return 0;
   }
-  TimeoutItemLink::remove(&cond_item->timeout);
-
-  co_get_curr_thread_env()->Epoll()->active_list()->add_tail(
-      &cond_item->timeout);
-
+  ActivateWaiter(cond_item);
   return 0;
 }
+
 int CoCond::Broadcast() {
   for (;;) {
     CoCondItem *cond_item = Pop();
-    if (!cond_item)
+    if (!cond_item) {
       return 0;
-
-    TimeoutItemLink::remove(&cond_item->timeout);
-
-    co_get_curr_thread_env()->Epoll()->active_list()->add_tail(
-        &cond_item->timeout);
+    }
+    ActivateWaiter(cond_item);
   }
-
-  return 0;
 }
+
 int CoCond::Timedwait(int ms) {
   CoCondItem *cond_item = (CoCondItem *)calloc(1, sizeof(CoCondItem));
   cond_item->timeout.arg = co_self();
