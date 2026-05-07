@@ -39,6 +39,28 @@ static void test_hooked_poll_duplicate_entries() {
   close(pipefd[1]);
 }
 
+static void test_hooked_poll_duplicate_timeout_clears_revents() {
+  int pipefd[2];
+  expect(pipe(pipefd) == 0, "pipe should succeed");
+  if (failures) {
+    return;
+  }
+
+  struct pollfd fds[2] = {
+      {pipefd[0], POLLIN, POLLIN},
+      {pipefd[0], POLLIN, POLLIN},
+  };
+  co_enable_hook_sys();
+  int ret = poll(fds, 2, 1);
+
+  expect(ret == 0, "poll should timeout with no ready duplicate entries");
+  expect(fds[0].revents == 0, "first duplicate revents should be cleared");
+  expect(fds[1].revents == 0, "second duplicate revents should be cleared");
+
+  close(pipefd[0]);
+  close(pipefd[1]);
+}
+
 static void test_direct_co_poll_duplicate_entries() {
   int pipefd[2];
   expect(pipe(pipefd) == 0, "pipe should succeed");
@@ -62,6 +84,7 @@ static void test_direct_co_poll_duplicate_entries() {
 
 static void test_duplicate_poll_entries() {
   test_hooked_poll_duplicate_entries();
+  test_hooked_poll_duplicate_timeout_clears_revents();
   test_direct_co_poll_duplicate_entries();
   done = true;
 }

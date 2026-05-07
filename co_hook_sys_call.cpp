@@ -463,8 +463,10 @@ int poll(struct pollfd fds[], nfds_t nfds, int timeout) {
   if (nfds > 1) {
     fds_merge = (pollfd *)malloc(sizeof(pollfd) * nfds);
     for (size_t i = 0; i < nfds; i++) {
+      fds[i].revents = 0;
       if ((it = m.find(fds[i].fd)) == m.end()) {
         fds_merge[nfds_merge] = fds[i];
+        fds_merge[nfds_merge].revents = 0;
         m[fds[i].fd] = nfds_merge;
         nfds_merge++;
       } else {
