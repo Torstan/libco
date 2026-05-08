@@ -20,12 +20,35 @@ available.
 #include "co_epoll.h"
 #include "co_timeout.h"
 #include <errno.h>
+#include <memory>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <system_error>
 #include <unistd.h>
 
 namespace co {
+
+namespace {
+
+struct FdGuard {
+  explicit FdGuard(int fd) : fd(fd) {}
+  ~FdGuard() {
+    if (fd >= 0) {
+      close(fd);
+    }
+  }
+
+  int release() {
+    int released = fd;
+    fd = -1;
+    return released;
+  }
+
+  int fd;
+};
+
+} // namespace
 
 #if !defined(__APPLE__) && !defined(__FreeBSD__)
 
@@ -298,9 +321,27 @@ static void co_epoll_res_free(struct co_epoll_res *ptr) {
 
 // EpollCtx implementation
 EpollCtx::EpollCtx()
-    : epoll_fd_(co_epoll_create(MAX_EVENTS)), timeout_(new Timeout()),
-      active_list_(new TimeoutItemLink()), timeout_list_(new TimeoutItemLink()),
-      result_(nullptr) {}
+    : epoll_fd_(-1), timeout_(nullptr), active_list_(nullptr),
+      timeout_list_(nullptr), result_(nullptr) {
+  FdGuard epoll_fd(co_epoll_create(MAX_EVENTS));
+  if (epoll_fd.fd < 0) {
+    int create_errno = errno;
+    if (create_errno == ENOMEM) {
+      throw std::bad_alloc();
+    }
+    throw std::system_error(create_errno, std::generic_category(),
+                            "co_epoll_create");
+  }
+
+  std::unique_ptr<Timeout> timeout(new Timeout());
+  std::unique_ptr<TimeoutItemLink> active_list(new TimeoutItemLink());
+  std::unique_ptr<TimeoutItemLink> timeout_list(new TimeoutItemLink());
+
+  epoll_fd_ = epoll_fd.release();
+  timeout_ = timeout.release();
+  active_list_ = active_list.release();
+  timeout_list_ = timeout_list.release();
+}
 
 EpollCtx::~EpollCtx() {
   delete active_list_;

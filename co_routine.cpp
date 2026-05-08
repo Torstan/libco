@@ -26,11 +26,13 @@ available.
 #include "util.h"
 
 #include <map>
+#include <memory>
 #include <new>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <string>
+#include <system_error>
 
 #include <errno.h>
 #include <poll.h>
@@ -100,7 +102,9 @@ void CoroutineDeleter::operator()(Coroutine *co) const { delete co; }
 Coroutine *Coroutine::Create(std::function<void()>&& func) {
   try {
     if (!ThreadEnv::Current() && !ThreadEnv::Init()) {
-      errno = ENOMEM;
+      if (errno == 0) {
+        errno = ENOMEM;
+      }
       return nullptr;
     }
     return new Coroutine(std::move(func));
@@ -176,6 +180,9 @@ bool ThreadEnv::Init() {
   } catch (const std::bad_alloc &) {
     errno = ENOMEM;
     return false;
+  } catch (const std::system_error &e) {
+    errno = e.code().value();
+    return false;
   }
 }
 
@@ -249,15 +256,21 @@ class PollState {
   PollState(EpollCtx *ep_ctx, struct pollfd fds[], nfds_t nfds,
             Coroutine *owner)
       : poll_(std::make_unique<PollBase>()) {
+    std::unique_ptr<pollfd[]> owned_fds(new pollfd[nfds]);
     poll_->epoll_fd = ep_ctx->fd();
-    poll_->fds = new pollfd[nfds];
     for (nfds_t i = 0; i < nfds; ++i) {
-      poll_->fds[i] = fds[i];
-      poll_->fds[i].revents = 0;
+      owned_fds[i] = fds[i];
+      owned_fds[i].revents = 0;
     }
+    std::unique_ptr<PollItem[]> owned_items;
+    if (nfds > kStackPollItemCount) {
+      owned_items.reset(new PollItem[nfds]);
+    }
+
+    poll_->fds = owned_fds.release();
     poll_->nfds = nfds;
     poll_->poll_items =
-        nfds <= kStackPollItemCount ? stack_items_ : new PollItem[nfds];
+        nfds <= kStackPollItemCount ? stack_items_ : owned_items.release();
     poll_->process_func = PollProcessFunc;
     poll_->arg = owner;
   }
@@ -431,7 +444,9 @@ int co_poll_inner(struct pollfd fds[], nfds_t nfds, int timeout,
   }
   EpollCtx *ep_ctx = co_get_epoll_ct();
   if (!ep_ctx) {
-    errno = ENOMEM;
+    if (errno == 0) {
+      errno = ENOMEM;
+    }
     return -1;
   }
   if (timeout < 0) {
@@ -589,7 +604,9 @@ static void DispatchActiveItems(EpollCtx *ep_ctx, unsigned long long now,
 void co_eventloop(pfn_co_eventloop_t func, void *arg) {
   EpollCtx *ep_ctx = co_get_epoll_ct();
   if (!ep_ctx) {
-    errno = ENOMEM;
+    if (errno == 0) {
+      errno = ENOMEM;
+    }
     return;
   }
 
