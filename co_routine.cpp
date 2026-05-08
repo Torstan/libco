@@ -275,10 +275,18 @@ static bool RegisterPollFds(EpollCtx *ep_ctx, struct pollfd fds[], nfds_t nfds,
       ev.events = PollEvent2Epoll(fds[i].events);
 
       int ret = ep_ctx->add(fds[i].fd, &ev);
-      if (ret < 0 && (errno == EPERM || errno == EBADF) && nfds == 1) {
-        *fallback_ret =
-            poll_func ? poll_func(fds, nfds, timeout) : SystemPoll(fds, nfds, 0);
-        return false;
+      if (ret < 0 && nfds == 1) {
+        int add_errno = errno;
+        bool should_fallback = add_errno == EPERM;
+        if (add_errno == EBADF) {
+          should_fallback = fcntl(fds[i].fd, F_GETFD) == -1 && errno == EBADF;
+        }
+        errno = add_errno;
+        if (should_fallback) {
+          *fallback_ret = poll_func ? poll_func(fds, nfds, timeout)
+                                    : SystemPoll(fds, nfds, 0);
+          return false;
+        }
       }
     }
     // if fail,the timeout would work
