@@ -24,6 +24,12 @@ enum FutureNoContextProbeExit {
   kFutureNoContextNonStdException = 3,
 };
 
+struct FutureNoContextPathResult {
+  bool safe{false};
+  int exit_code{kFutureNoContextSafe};
+  std::string actual;
+};
+
 struct ChildProbeResult {
   int status{255};
   std::string output;
@@ -102,6 +108,41 @@ ChildProbeResult run_child_probe_with_timeout(
   return ChildProbeResult{status, output};
 }
 
+bool has_future_no_context_message(const std::string &message) {
+  return message.find("not-ready Future") != std::string::npos &&
+         message.find("coroutine context") != std::string::npos;
+}
+
+FutureNoContextPathResult probe_future_without_context_path(
+    const char *path_name, const std::function<void(Future<int> &)> &wait_fn) {
+  Promise<int> promise;
+  Future<int> future = promise.get_future();
+  try {
+    wait_fn(future);
+    return FutureNoContextPathResult{
+        false, kFutureNoContextReturned,
+        std::string(path_name) + ": invalid state: call returned"};
+  } catch (const std::logic_error &ex) {
+    std::string message = ex.what();
+    bool safe = has_future_no_context_message(message);
+    return FutureNoContextPathResult{
+        safe, safe ? kFutureNoContextSafe : kFutureNoContextUnclearException,
+        std::string(path_name) +
+            (safe ? ": caught expected std::logic_error: "
+                  : ": std::logic_error message missing no-context semantics: ") +
+            message};
+  } catch (const std::exception &ex) {
+    return FutureNoContextPathResult{
+        false, kFutureNoContextUnclearException,
+        std::string(path_name) + ": caught unexpected std::exception: " +
+            ex.what()};
+  } catch (...) {
+    return FutureNoContextPathResult{
+        false, kFutureNoContextNonStdException,
+        std::string(path_name) + ": caught non-std exception"};
+  }
+}
+
 } // namespace
 
 static risk::Result resume_ended_coroutine() {
@@ -129,35 +170,37 @@ static risk::Result resume_ended_coroutine() {
 static risk::Result future_without_context() {
   ChildProbeResult child = run_child_probe_with_timeout(
       [](int out_fd) {
-        Promise<int> promise;
-        Future<int> future = promise.get_future();
-        try {
-          int value = future.get();
-          write_probe_actual(out_fd, "invalid state: future.get() returned " +
-                                         std::to_string(value));
-          return kFutureNoContextReturned;
-        } catch (const std::exception &ex) {
-          std::string actual = std::string("caught exception: ") + ex.what();
-          write_probe_actual(out_fd, actual);
-          return std::string(ex.what()).empty()
-                     ? kFutureNoContextUnclearException
-                     : kFutureNoContextSafe;
-        } catch (...) {
-          write_probe_actual(out_fd, "caught non-std exception");
-          return kFutureNoContextNonStdException;
+        FutureNoContextPathResult get_result =
+            probe_future_without_context_path(
+                "future.get()", [](Future<int> &future) { (void)future.get(); });
+        FutureNoContextPathResult wait_result =
+            probe_future_without_context_path(
+                "future.wait()", [](Future<int> &future) { future.wait(); });
+
+        write_probe_actual(out_fd,
+                           get_result.actual + "; " + wait_result.actual);
+
+        if (!get_result.safe) {
+          return get_result.exit_code;
         }
+        if (!wait_result.safe) {
+          return wait_result.exit_code;
+        }
+        return static_cast<int>(kFutureNoContextSafe);
       },
       1000);
   std::string actual = child.output;
   if (!risk::child_exited_cleanly(child.status)) {
     return risk::confirmed(
-        "P1-FUTURE-NO-CONTEXT", "`Future::get()` outside coroutine context",
-        "not-ready future reports an error without assert, abort, or hang",
+        "P1-FUTURE-NO-CONTEXT",
+        "`Future::get()` and `Future::wait()` outside coroutine context",
+        "not-ready future reports a semantic std::logic_error without assert, abort, or hang",
         actual, "risk-check");
   }
   return risk::not_reproduced(
-      "P1-FUTURE-NO-CONTEXT", "`Future::get()` outside coroutine context",
-      "not-ready future reports an error without assert, abort, or hang",
+      "P1-FUTURE-NO-CONTEXT",
+      "`Future::get()` and `Future::wait()` outside coroutine context",
+      "not-ready future reports a semantic std::logic_error without assert, abort, or hang",
       actual, "risk-check");
 }
 
