@@ -34,15 +34,11 @@ Run stable risk checks:
 timeout 30s make risk-check
 ```
 
-Expected result: nonzero when risks are confirmed. On the current sandbox this
-reproduces:
+Expected result: nonzero when risks are confirmed. On the current branch this
+still reproduces:
 
 - `P0-POLL-SAME-FD`: two coroutines polling the same fd do not both observe
   readiness cleanly.
-- `P1-POLL-ZERO-TIMEOUT`: `co_poll(timeout=0)` aborts instead of returning like
-  system `poll`.
-- `P1-POLL-FD-SEMANTICS`: closed and regular fd semantics differ from system
-  `poll`.
 - `P0-RESUME-ENDED`: resuming an ended coroutine terminates the child process.
 - `P1-FUTURE-NO-CONTEXT`: `Future::get()` outside coroutine context aborts.
 - `P1-PROMISE-ABANDONED`: abandoned promise aborts instead of reporting a
@@ -50,8 +46,10 @@ reproduces:
 - `P1-COROUTINE-THROW`: exception crossing coroutine boundary terminates the
   process.
 
-Hook syscall checks may print `needs environment` if the host denies socket or
-bind operations.
+The P1 `co_poll(timeout=0)`, closed fd, and regular fd semantics were fixed by
+`4e44aa2` and `32d93ec`; the same command now reports those records as
+`not reproduced`. Hook syscall checks may print `needs environment` if the host
+denies socket or bind operations.
 
 Run diagnostic checks:
 
