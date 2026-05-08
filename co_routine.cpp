@@ -164,6 +164,41 @@ static int SystemPoll(struct pollfd fds[], nfds_t nfds, int timeout) {
   return ::poll(fds, nfds, timeout);
 }
 
+static int DupFdCloseOnExec(int fd) {
+#ifdef F_DUPFD_CLOEXEC
+  {
+    int dup_fd = fcntl(fd, F_DUPFD_CLOEXEC, 0);
+    if (dup_fd >= 0) {
+      return dup_fd;
+    }
+  }
+  int dup_errno = errno;
+  if (dup_errno != EINVAL) {
+    errno = dup_errno;
+    return -1;
+  }
+#endif
+
+  int dup_fd = dup(fd);
+  if (dup_fd < 0) {
+    return -1;
+  }
+  int flags = fcntl(dup_fd, F_GETFD);
+  if (flags < 0) {
+    int dup_errno = errno;
+    close(dup_fd);
+    errno = dup_errno;
+    return -1;
+  }
+  if (fcntl(dup_fd, F_SETFD, flags | FD_CLOEXEC) < 0) {
+    int dup_errno = errno;
+    close(dup_fd);
+    errno = dup_errno;
+    return -1;
+  }
+  return dup_fd;
+}
+
 static void PollProcessFunc(TimeoutItem *item);
 
 static constexpr nfds_t kStackPollItemCount = 2;
@@ -262,9 +297,17 @@ static void PollPrepareFunc(TimeoutItem *timeout_item, struct epoll_event &e,
   }
 }
 
-static bool RegisterPollFds(EpollCtx *ep_ctx, struct pollfd fds[], nfds_t nfds,
-                            int timeout, poll_func_t poll_func,
-                            PollBase *poll, int *fallback_ret) {
+enum class PollRegisterResult {
+  kRegistered,
+  kFallback,
+  kError,
+};
+
+static PollRegisterResult RegisterPollFds(EpollCtx *ep_ctx,
+                                          struct pollfd fds[], nfds_t nfds,
+                                          int timeout, poll_func_t poll_func,
+                                          PollBase *poll,
+                                          int *fallback_ret) {
   for (nfds_t i = 0; i < nfds; i++) {
     PollItem &item = poll->poll_items[i];
     item.self_pfd = poll->fds + i;
@@ -283,7 +326,7 @@ static bool RegisterPollFds(EpollCtx *ep_ctx, struct pollfd fds[], nfds_t nfds,
       int registered_fd = fds[i].fd;
       bool owns_registered_fd = false;
       if (ret < 0 && errno == EEXIST) {
-        int dup_fd = dup(fds[i].fd);
+        int dup_fd = DupFdCloseOnExec(fds[i].fd);
         if (dup_fd >= 0) {
           ret = ep_ctx->add(dup_fd, &ev);
           if (ret == 0) {
@@ -294,6 +337,9 @@ static bool RegisterPollFds(EpollCtx *ep_ctx, struct pollfd fds[], nfds_t nfds,
             close(dup_fd);
             errno = add_errno;
           }
+        }
+        if (ret < 0) {
+          return PollRegisterResult::kError;
         }
       }
       if (ret == 0) {
@@ -310,13 +356,13 @@ static bool RegisterPollFds(EpollCtx *ep_ctx, struct pollfd fds[], nfds_t nfds,
         if (should_fallback) {
           *fallback_ret = poll_func ? poll_func(fds, nfds, timeout)
                                     : SystemPoll(fds, nfds, 0);
-          return false;
+          return PollRegisterResult::kFallback;
         }
       }
     }
     // if fail,the timeout would work
   }
-  return true;
+  return PollRegisterResult::kRegistered;
 }
 
 static void CleanupPoll(EpollCtx *ep_ctx, struct pollfd fds[], PollBase *poll) {
@@ -351,9 +397,17 @@ int co_poll_inner(struct pollfd fds[], nfds_t nfds, int timeout,
   PollBase *poll = state.poll();
 
   int fallback_ret = 0;
-  if (!RegisterPollFds(ep_ctx, fds, nfds, timeout, poll_func, poll,
-                       &fallback_ret)) {
+  PollRegisterResult register_result =
+      RegisterPollFds(ep_ctx, fds, nfds, timeout, poll_func, poll,
+                      &fallback_ret);
+  if (register_result == PollRegisterResult::kFallback) {
     return fallback_ret;
+  }
+  if (register_result == PollRegisterResult::kError) {
+    int register_errno = errno;
+    CleanupPoll(ep_ctx, fds, poll);
+    errno = register_errno;
+    return -1;
   }
 
   unsigned long long now = GetTickMS();
