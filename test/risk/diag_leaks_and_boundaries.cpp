@@ -9,6 +9,7 @@
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string>
 #include <sys/resource.h>
 #include <sys/socket.h>
 #include <thread>
@@ -200,7 +201,12 @@ static void run_schedule_thread_local_probe() {
   printf("regression: risk-diagnose\n\n");
 }
 
-int main() {
+int main(int argc, char **argv) {
+  if (argc == 2 && std::string(argv[1]) == "cond-only") {
+    run_cond_cross_thread_probe();
+    return 0;
+  }
+
   run_env_leak_probe();
   printf("RISK-ID: P1-ENV-LEAK\n");
   printf("scenario: coroutine private environment leak\n");

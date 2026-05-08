@@ -5,16 +5,19 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 LOG_DIR="$ROOT/logs/risk"
 mkdir -p "$LOG_DIR"
 
-make -C "$ROOT/test/risk" clean
+BUILD_DIR="build-asan"
+SANITIZER_PATTERNS="ERROR: AddressSanitizer|ERROR: LeakSanitizer|runtime error:|UndefinedBehaviorSanitizer|SUMMARY: UndefinedBehaviorSanitizer"
+
+make -C "$ROOT/test/risk" clean BUILD_DIR="$BUILD_DIR"
 make -C "$ROOT/test/risk" all \
-  SAN_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer"
+  BUILD_DIR="$BUILD_DIR" SAN_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer"
 
 set +e
 ASAN_OPTIONS="detect_leaks=1:abort_on_error=0" \
-  "$ROOT/test/risk/build/test_lifecycle_boundaries" >"$LOG_DIR/P0-P1-lifecycle.asan.log" 2>&1
+  "$ROOT/test/risk/$BUILD_DIR/test_lifecycle_boundaries" >"$LOG_DIR/P0-P1-lifecycle.asan.log" 2>&1
 lifecycle_status=$?
 ASAN_OPTIONS="detect_leaks=1:abort_on_error=0" \
-  "$ROOT/test/risk/build/diag_leaks_and_boundaries" >"$LOG_DIR/P1-leaks.asan-lsan.log" 2>&1
+  "$ROOT/test/risk/$BUILD_DIR/diag_leaks_and_boundaries" >"$LOG_DIR/P1-leaks.asan-lsan.log" 2>&1
 leak_status=$?
 set -e
 
@@ -23,8 +26,9 @@ echo "LSan leak log: $LOG_DIR/P1-leaks.asan-lsan.log"
 echo "ASan lifecycle status: $lifecycle_status"
 echo "LSan leak status: $leak_status"
 
-if grep -q "ERROR: AddressSanitizer" "$LOG_DIR/P0-P1-lifecycle.asan.log" ||
-   grep -q "ERROR: LeakSanitizer" "$LOG_DIR/P1-leaks.asan-lsan.log"; then
+if grep -E -q "$SANITIZER_PATTERNS" \
+  "$LOG_DIR/P0-P1-lifecycle.asan.log" \
+  "$LOG_DIR/P1-leaks.asan-lsan.log"; then
   exit 1
 fi
 

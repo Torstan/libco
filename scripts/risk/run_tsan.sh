@@ -5,14 +5,15 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 LOG_DIR="$ROOT/logs/risk"
 mkdir -p "$LOG_DIR"
 
-make -C "$ROOT/test/risk" clean
-make -C "$ROOT/test/risk" build/diag_hook_fd_race build/diag_leaks_and_boundaries \
-  SAN_FLAGS="-fsanitize=thread -fno-omit-frame-pointer"
+BUILD_DIR="build-tsan"
+make -C "$ROOT/test/risk" clean BUILD_DIR="$BUILD_DIR"
+make -C "$ROOT/test/risk" "$BUILD_DIR/diag_hook_fd_race" "$BUILD_DIR/diag_leaks_and_boundaries" \
+  BUILD_DIR="$BUILD_DIR" SAN_FLAGS="-fsanitize=thread -fno-omit-frame-pointer"
 
 set +e
-"$ROOT/test/risk/build/diag_hook_fd_race" >"$LOG_DIR/P0-HOOK-FD-RACE.tsan.log" 2>&1
+"$ROOT/test/risk/$BUILD_DIR/diag_hook_fd_race" >"$LOG_DIR/P0-HOOK-FD-RACE.tsan.log" 2>&1
 race_status=$?
-"$ROOT/test/risk/build/diag_leaks_and_boundaries" >"$LOG_DIR/P1-COND-CROSS-THREAD.tsan.log" 2>&1
+"$ROOT/test/risk/$BUILD_DIR/diag_leaks_and_boundaries" cond-only >"$LOG_DIR/P1-COND-CROSS-THREAD.tsan.log" 2>&1
 cond_status=$?
 set -e
 

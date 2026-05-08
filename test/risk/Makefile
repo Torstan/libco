@@ -1,5 +1,5 @@
 ROOT := ../..
-BUILD_DIR := build
+BUILD_DIR ?= build
 CXX ?= g++
 
 LIBCO_SRCS := \

@@ -7,8 +7,22 @@ mkdir -p "$LOG_DIR"
 
 make -C "$ROOT/test/risk" build/test_poll_semantics
 
+write_needs_environment_record() {
+  local actual="$1"
+  cat <<EOF
+RISK-ID: P0-POLL-SAME-FD
+scenario: two coroutines poll the same fd
+expected: strace can observe poll/epoll calls
+actual: $actual
+status: needs environment
+regression: scripts/risk/run_strace_poll.sh
+
+EOF
+}
+
 if ! command -v strace >/dev/null 2>&1; then
-  echo "strace is not installed"
+  write_needs_environment_record "strace is not installed" | tee "$LOG_DIR/P0-POLL-SAME-FD.strace.log"
+  : >"$LOG_DIR/P0-POLL-SAME-FD.strace.stdout.log"
   exit 2
 fi
 
@@ -23,4 +37,11 @@ set -e
 echo "strace stdout log: $LOG_DIR/P0-POLL-SAME-FD.strace.stdout.log"
 echo "strace log: $LOG_DIR/P0-POLL-SAME-FD.strace.log"
 echo "strace status: $status"
+
+if [ "$status" -ne 0 ] &&
+   grep -E -qi "operation not permitted|ptrace|PTRACE|permission denied" "$LOG_DIR/P0-POLL-SAME-FD.strace.log"; then
+  write_needs_environment_record "strace failed because ptrace is not permitted in this environment" |
+    tee -a "$LOG_DIR/P0-POLL-SAME-FD.strace.log"
+fi
+
 exit "$status"
