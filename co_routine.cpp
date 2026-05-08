@@ -152,6 +152,8 @@ struct PollBase : public TimeoutItem {
 struct PollItem : public TimeoutItem {
   struct pollfd *self_pfd{nullptr};
   PollBase *poll{nullptr};
+  int registered_fd{-1};
+  bool owns_registered_fd{false};
 
   struct epoll_event ep_event;
 };
@@ -264,17 +266,40 @@ static bool RegisterPollFds(EpollCtx *ep_ctx, struct pollfd fds[], nfds_t nfds,
                             int timeout, poll_func_t poll_func,
                             PollBase *poll, int *fallback_ret) {
   for (nfds_t i = 0; i < nfds; i++) {
-    poll->poll_items[i].self_pfd = poll->fds + i;
-    poll->poll_items[i].poll = poll;
+    PollItem &item = poll->poll_items[i];
+    item.self_pfd = poll->fds + i;
+    item.poll = poll;
+    item.registered_fd = -1;
+    item.owns_registered_fd = false;
 
-    poll->poll_items[i].prepare_func = PollPrepareFunc;
-    struct epoll_event &ev = poll->poll_items[i].ep_event;
+    item.prepare_func = PollPrepareFunc;
+    struct epoll_event &ev = item.ep_event;
 
     if (fds[i].fd > -1) {
-      ev.data.ptr = poll->poll_items + i;
+      ev.data.ptr = &item;
       ev.events = PollEvent2Epoll(fds[i].events);
 
       int ret = ep_ctx->add(fds[i].fd, &ev);
+      int registered_fd = fds[i].fd;
+      bool owns_registered_fd = false;
+      if (ret < 0 && errno == EEXIST) {
+        int dup_fd = dup(fds[i].fd);
+        if (dup_fd >= 0) {
+          ret = ep_ctx->add(dup_fd, &ev);
+          if (ret == 0) {
+            registered_fd = dup_fd;
+            owns_registered_fd = true;
+          } else {
+            int add_errno = errno;
+            close(dup_fd);
+            errno = add_errno;
+          }
+        }
+      }
+      if (ret == 0) {
+        item.registered_fd = registered_fd;
+        item.owns_registered_fd = owns_registered_fd;
+      }
       if (ret < 0 && nfds == 1) {
         int add_errno = errno;
         bool should_fallback = add_errno == EPERM;
@@ -297,9 +322,15 @@ static bool RegisterPollFds(EpollCtx *ep_ctx, struct pollfd fds[], nfds_t nfds,
 static void CleanupPoll(EpollCtx *ep_ctx, struct pollfd fds[], PollBase *poll) {
   TimeoutItemLink::remove(poll);
   for (nfds_t i = 0; i < poll->nfds; i++) {
-    int fd = fds[i].fd;
+    PollItem &item = poll->poll_items[i];
+    int fd = item.registered_fd;
     if (fd > -1) {
-      ep_ctx->del(fd, &poll->poll_items[i].ep_event);
+      ep_ctx->del(fd, &item.ep_event);
+      if (item.owns_registered_fd) {
+        close(fd);
+      }
+      item.registered_fd = -1;
+      item.owns_registered_fd = false;
     }
     fds[i].revents = poll->fds[i].revents;
   }
