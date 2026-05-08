@@ -341,7 +341,12 @@ public:
     }
     void wait() {
         auto thread_ctx = ThreadWorker::current_context;
-        assert(thread_ctx);
+        if (!thread_ctx) {
+            if (!state()->available()) {
+                throw std::logic_error("cannot wait on a not-ready Future without a coroutine context");
+            }
+            return;
+        }
 
         schedule([this, thread_ctx] (FutureState<T>&& new_state) {
             *state() = std::move(new_state);

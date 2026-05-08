@@ -17,6 +17,13 @@ enum AbandonedPromiseProbeExit {
   kAbandonedPromiseInvalidState = 1,
 };
 
+enum FutureNoContextProbeExit {
+  kFutureNoContextSafe = 0,
+  kFutureNoContextReturned = 1,
+  kFutureNoContextUnclearException = 2,
+  kFutureNoContextNonStdException = 3,
+};
+
 struct ChildProbeResult {
   int status{255};
   std::string output;
@@ -120,15 +127,29 @@ static risk::Result resume_ended_coroutine() {
 }
 
 static risk::Result future_without_context() {
-  int status = risk::run_child_with_timeout(
-      []() {
+  ChildProbeResult child = run_child_probe_with_timeout(
+      [](int out_fd) {
         Promise<int> promise;
         Future<int> future = promise.get_future();
-        (void)future.get();
+        try {
+          int value = future.get();
+          write_probe_actual(out_fd, "invalid state: future.get() returned " +
+                                         std::to_string(value));
+          return kFutureNoContextReturned;
+        } catch (const std::exception &ex) {
+          std::string actual = std::string("caught exception: ") + ex.what();
+          write_probe_actual(out_fd, actual);
+          return std::string(ex.what()).empty()
+                     ? kFutureNoContextUnclearException
+                     : kFutureNoContextSafe;
+        } catch (...) {
+          write_probe_actual(out_fd, "caught non-std exception");
+          return kFutureNoContextNonStdException;
+        }
       },
       1000);
-  std::string actual = risk::child_status_text(status);
-  if (!risk::child_exited_cleanly(status)) {
+  std::string actual = child.output;
+  if (!risk::child_exited_cleanly(child.status)) {
     return risk::confirmed(
         "P1-FUTURE-NO-CONTEXT", "`Future::get()` outside coroutine context",
         "not-ready future reports an error without assert, abort, or hang",
