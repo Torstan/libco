@@ -42,13 +42,10 @@ static int same_fd_loop(void *arg) {
   return 0;
 }
 
-static risk::Result same_fd_two_waiters() {
+static int same_fd_two_waiters_child() {
   int pipefd[2];
   if (pipe(pipefd) != 0) {
-    return risk::needs_environment(
-        "P0-POLL-SAME-FD", "two coroutines poll the same fd",
-        "pipe can be created", std::string("pipe failed: ") + strerror(errno),
-        "risk-check");
+    _exit(2);
   }
 
   SameFdState state;
@@ -77,18 +74,27 @@ static risk::Result same_fd_two_waiters() {
 
   close(pipefd[0]);
   close(pipefd[1]);
-  co_free(first);
-  co_free(second);
+  if (state.complete == 2) {
+    co_free(first);
+    co_free(second);
+  }
 
   bool both_ready = state.ret[0] == 1 && state.ret[1] == 1 &&
                     (state.revents[0] & POLLIN) &&
                     (state.revents[1] & POLLIN);
-  char actual[256];
-  snprintf(actual, sizeof(actual),
-           "ret=[%d,%d] revents=[0x%x,0x%x] complete=%d wrote=%d",
-           state.ret[0], state.ret[1], state.revents[0], state.revents[1],
-           state.complete, state.wrote ? 1 : 0);
-  if (!both_ready) {
+  _exit(both_ready ? 0 : 1);
+}
+
+static risk::Result same_fd_two_waiters() {
+  int status = risk::run_child_with_timeout([]() { same_fd_two_waiters_child(); },
+                                            1000);
+  std::string actual = risk::child_status_text(status);
+  if (WIFEXITED(status) && WEXITSTATUS(status) == 2) {
+    return risk::needs_environment(
+        "P0-POLL-SAME-FD", "two coroutines poll the same fd",
+        "pipe can be created", actual, "risk-check");
+  }
+  if (!risk::child_exited_cleanly(status)) {
     return risk::confirmed(
         "P0-POLL-SAME-FD", "two coroutines poll the same fd",
         "both waiters observe POLLIN and return 1", actual, "risk-check");
@@ -99,7 +105,7 @@ static risk::Result same_fd_two_waiters() {
 }
 
 static risk::Result zero_timeout_child_check() {
-  int status = risk::run_child([]() {
+  int status = risk::run_child_with_timeout([]() {
     int pipefd[2];
     risk::require_syscall(pipe(pipefd) == 0, "pipe");
     struct pollfd pfd = {pipefd[0], POLLIN, 0};
@@ -107,7 +113,7 @@ static risk::Result zero_timeout_child_check() {
     close(pipefd[0]);
     close(pipefd[1]);
     _exit(ret == 0 ? 0 : 3);
-  });
+  }, 1000);
   std::string actual = risk::child_status_text(status);
   if (!risk::child_exited_cleanly(status)) {
     return risk::confirmed(
@@ -146,6 +152,8 @@ static void run_co_poll_once(PollOnceState *state) {
 }
 
 static risk::Result closed_fd_poll_semantics() {
+  co_get_epoll_ct();
+
   int pipefd[2];
   if (pipe(pipefd) != 0) {
     return risk::needs_environment(

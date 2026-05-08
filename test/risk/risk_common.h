@@ -11,6 +11,7 @@
 #include <sys/resource.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 #include <functional>
@@ -153,6 +154,53 @@ inline int run_child(const std::function<void()> &fn) {
     }
   }
   return status;
+}
+
+inline unsigned long long now_ms() {
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return static_cast<unsigned long long>(ts.tv_sec) * 1000ULL +
+         static_cast<unsigned long long>(ts.tv_nsec) / 1000000ULL;
+}
+
+inline int run_child_with_timeout(const std::function<void()> &fn,
+                                  int timeout_ms) {
+  pid_t pid = fork();
+  if (pid < 0) {
+    perror("fork");
+    return 255;
+  }
+  if (pid == 0) {
+    fn();
+    _exit(0);
+  }
+
+  int status = 0;
+  unsigned long long deadline = now_ms() + timeout_ms;
+  for (;;) {
+    pid_t result = waitpid(pid, &status, WNOHANG);
+    if (result == pid) {
+      return status;
+    }
+    if (result < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      perror("waitpid");
+      return 255;
+    }
+    if (now_ms() >= deadline) {
+      kill(pid, SIGKILL);
+      while (waitpid(pid, &status, 0) < 0) {
+        if (errno != EINTR) {
+          perror("waitpid");
+          return 255;
+        }
+      }
+      return status;
+    }
+    usleep(1000);
+  }
 }
 
 inline bool child_exited_cleanly(int status) {
