@@ -9,11 +9,11 @@ Status values: `not run`, `confirmed`, `not reproduced`, `needs environment`,
 | --- | --- | --- | --- | --- | --- |
 | P0-HOOK-FD-RACE | P0 | Global hook fd table race and UAF | `scripts/risk/run_tsan.sh` | not run | |
 | P0-HOOK-CLOSE-STALE | P0 | `close()` leaves stale hook metadata when hook is disabled | `make risk-check` | not run | |
-| P0-POLL-SAME-FD | P0 | Two coroutines poll the same fd | `make risk-check` | not run | |
+| P0-POLL-SAME-FD | P0 | Two coroutines poll the same fd | `make risk-check` | confirmed | `make risk-check` |
 | P0-HOOK-ALLOC-FD-LEAK | P0 | Hook metadata allocation failure leaks fd | `make risk-diagnose` | not run | |
 | P0-RESUME-ENDED | P0 | Resume ended coroutine | `make risk-check` | not run | |
-| P1-POLL-ZERO-TIMEOUT | P1 | `co_poll(timeout=0)` semantics | `make risk-check` | not run | |
-| P1-POLL-FD-SEMANTICS | P1 | Invalid, closed, and regular fd polling semantics | `make risk-check` | not run | |
+| P1-POLL-ZERO-TIMEOUT | P1 | `co_poll(timeout=0)` semantics | `make risk-check` | confirmed | `make risk-check` |
+| P1-POLL-FD-SEMANTICS | P1 | Invalid, closed, and regular fd polling semantics | `make risk-check` | confirmed | `make risk-check` |
 | P1-CONNECT-ERRNO | P1 | Hooked `connect()` errno behavior | `make risk-check` | not run | |
 | P1-SETSOCKOPT-INVALID | P1 | Invalid timeout `setsockopt()` arguments | `make risk-check` | not run | |
 | P1-ENV-LEAK | P1 | Coroutine private environment leak | `scripts/risk/run_asan_lsan.sh` | not run | |

@@ -16,7 +16,7 @@ COMMON_FLAGS := -I$(ROOT) -I. -g -fno-strict-aliasing -O1 --std=c++17 \
 	-Wall -Werror -pipe -D_GNU_SOURCE -D_REENTRANT -fPIC -Wno-deprecated -m64
 COMMON_LIBS := -lpthread -ldl
 
-RISK_CHECK_PROGS :=
+RISK_CHECK_PROGS := test_poll_semantics
 RISK_DIAGNOSE_PROGS :=
 ALL_PROGS := $(RISK_CHECK_PROGS) $(RISK_DIAGNOSE_PROGS)
 
