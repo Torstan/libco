@@ -52,7 +52,11 @@ namespace co {
 
 class ThreadEnvTls {
 public:
-  ~ThreadEnvTls() { delete env; }
+  ~ThreadEnvTls() {
+    ThreadEnv *to_delete = env;
+    env = nullptr;
+    delete to_delete;
+  }
 
   ThreadEnv *env{nullptr};
 };
