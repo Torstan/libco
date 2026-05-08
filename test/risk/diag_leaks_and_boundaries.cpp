@@ -141,8 +141,10 @@ static bool run_allocation_failure_probe() {
             }
             routines[i] = routine;
           }
-          if (routines[0]) {
-            co_free(routines[0]);
+          for (Coroutine *routine : routines) {
+            if (routine) {
+              co_free(routine);
+            }
           }
         } catch (const std::exception &) {
           _exit(kStdExceptionEscaped);

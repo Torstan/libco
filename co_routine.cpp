@@ -26,6 +26,7 @@ available.
 #include "util.h"
 
 #include <map>
+#include <new>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -485,13 +486,26 @@ int co_poll(struct pollfd fds[], nfds_t nfds, int timeout_ms) {
     return co_poll_inner(fds, nfds, timeout_ms, nullptr);
   }
 
-  std::unique_ptr<pollfd[]> fds_merge(new pollfd[nfds]);
-  nfds_t nfds_merge = 0;
   std::map<int, nfds_t> fd_to_merged_idx;
+  std::unique_ptr<pollfd[]> fds_merge;
+  try {
+    fds_merge.reset(new pollfd[nfds]);
+  } catch (const std::bad_alloc &) {
+    errno = ENOMEM;
+    return -1;
+  }
+
+  nfds_t nfds_merge = 0;
   bool has_duplicate = false;
   for (nfds_t i = 0; i < nfds; ++i) {
     fds[i].revents = 0;
-    auto ret = fd_to_merged_idx.insert(std::make_pair(fds[i].fd, nfds_merge));
+    std::pair<std::map<int, nfds_t>::iterator, bool> ret;
+    try {
+      ret = fd_to_merged_idx.insert(std::make_pair(fds[i].fd, nfds_merge));
+    } catch (const std::bad_alloc &) {
+      errno = ENOMEM;
+      return -1;
+    }
     if (ret.second) {
       fds_merge[nfds_merge] = fds[i];
       fds_merge[nfds_merge].revents = 0;
@@ -581,6 +595,12 @@ void co_eventloop(pfn_co_eventloop_t func, void *arg) {
 
   for (;;) {
     int ret = ep_ctx->wait(1);
+    if (ret < 0) {
+      int wait_errno = errno;
+      errno = wait_errno;
+      break;
+    }
+
     TimeoutItemLink *active = ep_ctx->active_list();
     TimeoutItemLink *timeout = ep_ctx->timeout_list();
     timeout->clear();
