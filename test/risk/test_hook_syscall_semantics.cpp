@@ -286,10 +286,16 @@ risk::Result invalid_setsockopt_child() {
       "risk-check");
 }
 
-int bind_unused_local_port() {
+struct BoundLocalPort {
+  int fd{-1};
+  int port{-1};
+};
+
+BoundLocalPort bind_local_port() {
+  BoundLocalPort result;
   int fd = ::socket(AF_INET, SOCK_STREAM, 0);
   if (fd < 0) {
-    return -1;
+    return result;
   }
 
   sockaddr_in addr;
@@ -299,28 +305,28 @@ int bind_unused_local_port() {
   addr.sin_port = 0;
   if (bind(fd, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) != 0) {
     close(fd);
-    return -1;
+    return result;
   }
   socklen_t len = sizeof(addr);
   if (getsockname(fd, reinterpret_cast<sockaddr *>(&addr), &len) != 0) {
     close(fd);
-    return -1;
+    return result;
   }
 
-  int port = ntohs(addr.sin_port);
-  close(fd);
-  return port;
+  result.fd = fd;
+  result.port = ntohs(addr.sin_port);
+  return result;
 }
 
 void connect_errno_child(int out_fd) {
-  int port = bind_unused_local_port();
-  if (port <= 0) {
-    write_probe_line(out_fd, "bind unused port failed: %s", strerror(errno));
+  BoundLocalPort bound = bind_local_port();
+  if (bound.fd < 0 || bound.port <= 0) {
+    write_probe_line(out_fd, "bind local port failed: %s", strerror(errno));
     _exit(kProbeNeedsEnvironment);
   }
 
   BoolState state;
-  run_bounded_coroutine(&state, [&state, port]() {
+  run_bounded_coroutine(&state, [&state, port = bound.port]() {
     co_enable_hook_sys();
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) {
@@ -350,6 +356,7 @@ void connect_errno_child(int out_fd) {
   });
 
   write_probe_line(out_fd, "%s", state.actual.c_str());
+  close(bound.fd);
   if (state.needs_environment) {
     _exit(kProbeNeedsEnvironment);
   }
@@ -364,7 +371,7 @@ risk::Result connect_errno_refused() {
   if (probe_exit_code(child.status, kProbeNeedsEnvironment)) {
     return risk::needs_environment(
         "P1-CONNECT-ERRNO", "hooked `connect()` errno behavior",
-        "local unused TCP port can be selected", actual, "risk-check");
+        "local TCP port can be bound", actual, "risk-check");
   }
   if (probe_exit_code(child.status, kProbeConfirmed) ||
       !risk::child_exited_cleanly(child.status)) {

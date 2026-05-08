@@ -14,7 +14,7 @@ Status values: `not run`, `confirmed`, `not reproduced`, `needs environment`,
 | P0-RESUME-ENDED | P0 | Resume ended coroutine | `make risk-check` | not run | |
 | P1-POLL-ZERO-TIMEOUT | P1 | `co_poll(timeout=0)` semantics | `make risk-check` | confirmed | `make risk-check` |
 | P1-POLL-FD-SEMANTICS | P1 | Invalid, closed, and regular fd polling semantics | `make risk-check` | confirmed | `make risk-check` |
-| P1-CONNECT-ERRNO | P1 | Hooked `connect()` errno behavior | `make risk-check` | needs environment | `timeout 20s test/risk/build/test_hook_syscall_semantics`: bind unused port failed with `EPERM`; child exited status 2 |
+| P1-CONNECT-ERRNO | P1 | Hooked `connect()` errno behavior | `make risk-check` | needs environment | `timeout 20s test/risk/build/test_hook_syscall_semantics`: bind local port failed with `EPERM`; child exited status 2 |
 | P1-SETSOCKOPT-INVALID | P1 | Invalid timeout `setsockopt()` arguments | `make risk-check` | needs environment | `timeout 20s test/risk/build/test_hook_syscall_semantics`: socket creation failed with `EPERM`; child exited status 2 |
 | P1-ENV-LEAK | P1 | Coroutine private environment leak | `scripts/risk/run_asan_lsan.sh` | not run | |
 | P1-THREADENV-LEAK | P1 | Per-thread `ThreadEnv` leak | `scripts/risk/run_asan_lsan.sh` | not run | |
