@@ -3,11 +3,99 @@
 #include "co_future.h"
 #include "co_routine.h"
 
+#include <functional>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
 using namespace co;
+
+namespace {
+
+enum AbandonedPromiseProbeExit {
+  kAbandonedPromiseSafe = 0,
+  kAbandonedPromiseInvalidState = 1,
+};
+
+struct ChildProbeResult {
+  int status{255};
+  std::string output;
+};
+
+void write_probe_actual(int fd, const std::string &actual) {
+  ssize_t ignored = write(fd, actual.c_str(), actual.size());
+  (void)ignored;
+}
+
+ChildProbeResult run_child_probe_with_timeout(
+    const std::function<int(int)> &fn, int timeout_ms) {
+  int pipefd[2];
+  if (pipe(pipefd) != 0) {
+    perror("pipe");
+    return ChildProbeResult{255, "pipe failed"};
+  }
+
+  pid_t pid = fork();
+  if (pid < 0) {
+    perror("fork");
+    close(pipefd[0]);
+    close(pipefd[1]);
+    return ChildProbeResult{255, "fork failed"};
+  }
+
+  if (pid == 0) {
+    close(pipefd[0]);
+    int code = fn(pipefd[1]);
+    close(pipefd[1]);
+    _exit(code);
+  }
+
+  close(pipefd[1]);
+
+  int status = 0;
+  unsigned long long deadline = risk::now_ms() + timeout_ms;
+  for (;;) {
+    pid_t result = waitpid(pid, &status, WNOHANG);
+    if (result == pid) {
+      break;
+    }
+    if (result < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      perror("waitpid");
+      status = 255;
+      break;
+    }
+    if (risk::now_ms() >= deadline) {
+      kill(pid, SIGKILL);
+      while (waitpid(pid, &status, 0) < 0) {
+        if (errno != EINTR) {
+          perror("waitpid");
+          status = 255;
+          break;
+        }
+      }
+      break;
+    }
+    usleep(1000);
+  }
+
+  std::string output;
+  char buf[256];
+  ssize_t n = 0;
+  while ((n = read(pipefd[0], buf, sizeof(buf))) > 0) {
+    output.append(buf, static_cast<size_t>(n));
+  }
+  close(pipefd[0]);
+
+  if (output.empty()) {
+    output = risk::child_status_text(status);
+  }
+  return ChildProbeResult{status, output};
+}
+
+} // namespace
 
 static risk::Result resume_ended_coroutine() {
   int status = risk::run_child_with_timeout(
@@ -54,6 +142,8 @@ static risk::Result future_without_context() {
 
 struct AbandonedPromiseState {
   bool done{false};
+  bool invalid_state{false};
+  std::string actual;
 };
 
 static int abandoned_promise_loop(void *arg) {
@@ -62,8 +152,8 @@ static int abandoned_promise_loop(void *arg) {
 }
 
 static risk::Result abandoned_promise_behavior() {
-  int status = risk::run_child_with_timeout(
-      []() {
+  ChildProbeResult child = run_child_probe_with_timeout(
+      [](int out_fd) {
         Future<int> *future = nullptr;
         {
           Promise<int> promise;
@@ -72,18 +162,31 @@ static risk::Result abandoned_promise_behavior() {
 
         AbandonedPromiseState state;
         Coroutine *routine = co_create([future, &state]() {
-          (void)future->get();
+          try {
+            int value = future->get();
+            state.actual =
+                "invalid state: future->get() returned " +
+                std::to_string(value);
+            state.invalid_state = true;
+          } catch (const std::exception &ex) {
+            state.actual = std::string("caught exception: ") + ex.what();
+          } catch (...) {
+            state.actual = "caught non-std exception";
+          }
           state.done = true;
         });
         co_resume(routine);
         co_eventloop(abandoned_promise_loop, &state);
 
+        write_probe_actual(out_fd, state.actual);
         co_free(routine);
         delete future;
+        return state.invalid_state ? kAbandonedPromiseInvalidState
+                                   : kAbandonedPromiseSafe;
       },
       1000);
-  std::string actual = risk::child_status_text(status);
-  if (!risk::child_exited_cleanly(status)) {
+  std::string actual = child.output;
+  if (!risk::child_exited_cleanly(child.status)) {
     return risk::confirmed(
         "P1-PROMISE-ABANDONED", "abandoned promise behavior",
         "future observes a clear broken-promise result or bounded wait without abort",
