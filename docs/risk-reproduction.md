@@ -49,12 +49,12 @@ The current branch also fixed this lifecycle risk:
 - `P1-COROUTINE-THROW`: fixed by `1dc880c`. Raw coroutine exceptions are
   consumed at the coroutine boundary; use `co_async`/`Future` when exception
   propagation is required.
+- `P1-PROMISE-ABANDONED`: fixed by `01df2a2`; abandoned pending promises now
+  complete the future with a broken-promise exception.
 
 The same command still reproduces these lifecycle risks:
 
 - `P1-FUTURE-NO-CONTEXT`: `Future::get()` outside coroutine context aborts.
-- `P1-PROMISE-ABANDONED`: abandoned promise aborts instead of reporting a
-  bounded broken-promise result.
 
 Hook syscall checks may print `needs environment` if the host denies socket or
 bind operations.
