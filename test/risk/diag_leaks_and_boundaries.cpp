@@ -35,6 +35,15 @@ static void run_env_leak_probe() {
   }
 }
 
+static void print_env_leak_result() {
+  printf("RISK-ID: P1-ENV-LEAK\n");
+  printf("scenario: coroutine private environment leak\n");
+  printf("expected: LSan reports no per-coroutine env leak\n");
+  printf("actual: env probe completed; inspect LSan output\n");
+  printf("status: not reproduced without leak report\n");
+  printf("regression: risk-diagnose\n\n");
+}
+
 static bool run_thread_env_probe() {
   int before = risk::count_open_fds();
   for (int i = 0; i < 50; ++i) {
@@ -207,20 +216,21 @@ static void run_schedule_thread_local_probe() {
 }
 
 int main(int argc, char **argv) {
+  setvbuf(stdout, nullptr, _IONBF, 0);
+
   if (argc == 2 && std::string(argv[1]) == "cond-only") {
     return run_cond_cross_thread_probe() ? 1 : 0;
   }
 
   bool confirmed = false;
   run_env_leak_probe();
-  printf("RISK-ID: P1-ENV-LEAK\n");
-  printf("scenario: coroutine private environment leak\n");
-  printf("expected: LSan reports no per-coroutine env leak\n");
-  printf("actual: env probe completed; inspect LSan output\n");
-  printf("status: not reproduced without leak report\n");
-  printf("regression: risk-diagnose\n\n");
+  print_env_leak_result();
 
   confirmed = run_thread_env_probe() || confirmed;
+  if (argc == 2 && std::string(argv[1]) == "leak-only") {
+    return confirmed ? 1 : 0;
+  }
+
   confirmed = run_hook_alloc_fd_leak_probe() || confirmed;
   confirmed = run_allocation_failure_probe() || confirmed;
   confirmed = run_cond_cross_thread_probe() || confirmed;

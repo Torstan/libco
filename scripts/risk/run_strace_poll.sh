@@ -23,7 +23,7 @@ EOF
 if ! command -v strace >/dev/null 2>&1; then
   write_needs_environment_record "strace is not installed" | tee "$LOG_DIR/P0-POLL-SAME-FD.strace.log"
   : >"$LOG_DIR/P0-POLL-SAME-FD.strace.stdout.log"
-  exit 2
+  exit 0
 fi
 
 set +e
@@ -42,6 +42,7 @@ if [ "$status" -ne 0 ] &&
    grep -E -qi "operation not permitted|ptrace|PTRACE|permission denied" "$LOG_DIR/P0-POLL-SAME-FD.strace.log"; then
   write_needs_environment_record "strace failed because ptrace is not permitted in this environment" |
     tee -a "$LOG_DIR/P0-POLL-SAME-FD.strace.log"
+  exit 0
 fi
 
 exit "$status"
