@@ -46,14 +46,15 @@ The current branch fixed these poll risks:
 The current branch also fixed this lifecycle risk:
 
 - `P0-RESUME-ENDED`: fixed by `294ab24`.
+- `P1-COROUTINE-THROW`: fixed by `1dc880c`. Raw coroutine exceptions are
+  consumed at the coroutine boundary; use `co_async`/`Future` when exception
+  propagation is required.
 
 The same command still reproduces these lifecycle risks:
 
 - `P1-FUTURE-NO-CONTEXT`: `Future::get()` outside coroutine context aborts.
 - `P1-PROMISE-ABANDONED`: abandoned promise aborts instead of reporting a
   bounded broken-promise result.
-- `P1-COROUTINE-THROW`: exception crossing coroutine boundary terminates the
-  process.
 
 Hook syscall checks may print `needs environment` if the host denies socket or
 bind operations.
