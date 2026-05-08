@@ -17,7 +17,7 @@ COMMON_FLAGS := -I$(ROOT) -I. -g -fno-strict-aliasing -O1 --std=c++17 \
 COMMON_LIBS := -lpthread -ldl
 
 RISK_CHECK_PROGS := test_poll_semantics test_hook_syscall_semantics test_lifecycle_boundaries
-RISK_DIAGNOSE_PROGS :=
+RISK_DIAGNOSE_PROGS := diag_hook_fd_race diag_leaks_and_boundaries diag_perf_boundaries
 ALL_PROGS := $(RISK_CHECK_PROGS) $(RISK_DIAGNOSE_PROGS)
 
 .PHONY: all check diagnose clean
