@@ -4,6 +4,7 @@
 #include "thread_worker.h"
 #include <cassert>
 #include <exception>
+#include <stdexcept>
 #include <type_traits>
 
 namespace co {
@@ -143,6 +144,15 @@ struct FutureState {
         return _u.value;
     }
 };
+
+inline std::exception_ptr make_broken_promise_exception() noexcept {
+    try {
+        return std::make_exception_ptr(
+            std::runtime_error("promise abandoned before setting a result"));
+    } catch (...) {
+        return std::current_exception();
+    }
+}
 
 template<typename Func, typename T>
 struct Continuation final : Task {
@@ -386,8 +396,19 @@ void Promise<T>::abandoned() noexcept {
     if (_future) {
         assert(_state);
         assert(_state->available() || !_task);
+        if (!_state->available()) {
+            _state->set_exception(make_broken_promise_exception());
+        }
         _future->_local_state = std::move(*_state);
         _future->_promise = nullptr;
+        _state = nullptr;
+    } else if (_task) {
+        assert(_state);
+        if (!_state->available()) {
+            _state->set_exception(make_broken_promise_exception());
+        }
+        _state = nullptr;
+        co::schedule(std::move(_task));
     }
 }
 
