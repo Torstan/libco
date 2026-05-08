@@ -158,6 +158,10 @@ struct PollItem : public TimeoutItem {
 
 typedef int (*poll_func_t)(struct pollfd fds[], nfds_t nfds, int timeout);
 
+static int SystemPoll(struct pollfd fds[], nfds_t nfds, int timeout) {
+  return ::poll(fds, nfds, timeout);
+}
+
 static void PollProcessFunc(TimeoutItem *item);
 
 static constexpr nfds_t kStackPollItemCount = 2;
@@ -271,8 +275,9 @@ static bool RegisterPollFds(EpollCtx *ep_ctx, struct pollfd fds[], nfds_t nfds,
       ev.events = PollEvent2Epoll(fds[i].events);
 
       int ret = ep_ctx->add(fds[i].fd, &ev);
-      if (ret < 0 && errno == EPERM && nfds == 1 && poll_func != nullptr) {
-        *fallback_ret = poll_func(fds, nfds, timeout);
+      if (ret < 0 && (errno == EPERM || errno == EBADF) && nfds == 1) {
+        *fallback_ret =
+            poll_func ? poll_func(fds, nfds, timeout) : SystemPoll(fds, nfds, 0);
         return false;
       }
     }
@@ -295,8 +300,9 @@ static void CleanupPoll(EpollCtx *ep_ctx, struct pollfd fds[], PollBase *poll) {
 int co_poll_inner(struct pollfd fds[], nfds_t nfds, int timeout,
                   poll_func_t poll_func) {
   EpollCtx *ep_ctx = co_get_epoll_ct();
-  if (timeout == 0 && poll_func != nullptr) {
-    return poll_func(fds, nfds, timeout);
+  if (timeout == 0) {
+    return poll_func ? poll_func(fds, nfds, timeout)
+                     : SystemPoll(fds, nfds, timeout);
   }
   if (timeout < 0) {
     timeout = INT_MAX;
