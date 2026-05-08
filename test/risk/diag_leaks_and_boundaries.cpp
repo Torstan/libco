@@ -35,7 +35,7 @@ static void run_env_leak_probe() {
   }
 }
 
-static void run_thread_env_probe() {
+static bool run_thread_env_probe() {
   int before = risk::count_open_fds();
   for (int i = 0; i < 50; ++i) {
     std::thread([]() {
@@ -45,15 +45,17 @@ static void run_thread_env_probe() {
     }).join();
   }
   int after = risk::count_open_fds();
+  bool confirmed = after > before;
   printf("RISK-ID: P1-THREADENV-LEAK\n");
   printf("scenario: per-thread ThreadEnv leak\n");
   printf("expected: fd count does not grow after short-lived coroutine threads\n");
   printf("actual: fd_count_before=%d fd_count_after=%d\n", before, after);
-  printf("status: %s\n", after > before ? "confirmed" : "not reproduced");
+  printf("status: %s\n", confirmed ? "confirmed" : "not reproduced");
   printf("regression: risk-diagnose\n\n");
+  return confirmed;
 }
 
-static void run_hook_alloc_fd_leak_probe() {
+static bool run_hook_alloc_fd_leak_probe() {
   struct rlimit limit;
   if (getrlimit(RLIMIT_NOFILE, &limit) != 0 || limit.rlim_cur <= 102401) {
     printf("RISK-ID: P0-HOOK-ALLOC-FD-LEAK\n");
@@ -62,7 +64,7 @@ static void run_hook_alloc_fd_leak_probe() {
     printf("actual: RLIMIT_NOFILE is below required fd-table ceiling\n");
     printf("status: needs environment\n");
     printf("regression: risk-diagnose\n\n");
-    return;
+    return false;
   }
 
   std::vector<int> fds;
@@ -92,17 +94,18 @@ static void run_hook_alloc_fd_leak_probe() {
     close(hooked_fd);
   }
 
+  bool confirmed = hooked_fd < 0 && after > before;
   printf("RISK-ID: P0-HOOK-ALLOC-FD-LEAK\n");
   printf("scenario: hook metadata allocation failure leaks fd\n");
   printf("expected: failed hooked socket closes the real fd\n");
   printf("actual: hooked_fd=%d fd_count_before=%d fd_count_after=%d\n",
          hooked_fd, before, after);
-  printf("status: %s\n",
-         hooked_fd < 0 && after > before ? "confirmed" : "not reproduced");
+  printf("status: %s\n", confirmed ? "confirmed" : "not reproduced");
   printf("regression: risk-diagnose\n\n");
+  return confirmed;
 }
 
-static void run_allocation_failure_probe() {
+static bool run_allocation_failure_probe() {
   int status = risk::run_child_with_timeout(
       []() {
         struct rlimit limit;
@@ -119,13 +122,14 @@ static void run_allocation_failure_probe() {
       },
       1500);
 
+  bool confirmed = !risk::child_exited_cleanly(status);
   printf("RISK-ID: P1-ALLOC-FAILURE\n");
   printf("scenario: allocation failure safety\n");
   printf("expected: allocation failure reports a controlled error\n");
   printf("actual: %s\n", risk::child_status_text(status).c_str());
-  printf("status: %s\n",
-         risk::child_exited_cleanly(status) ? "not reproduced" : "confirmed");
+  printf("status: %s\n", confirmed ? "confirmed" : "not reproduced");
   printf("regression: risk-diagnose\n\n");
+  return confirmed;
 }
 
 struct CondProbeState {
@@ -146,7 +150,7 @@ static int cond_loop(void *arg) {
   return 0;
 }
 
-static void run_cond_cross_thread_probe() {
+static bool run_cond_cross_thread_probe() {
   int status = risk::run_child_with_timeout(
       []() {
         CondProbeState state;
@@ -172,14 +176,15 @@ static void run_cond_cross_thread_probe() {
       },
       1000);
 
+  bool confirmed = !risk::child_exited_cleanly(status);
   printf("RISK-ID: P1-COND-CROSS-THREAD\n");
   printf("scenario: CoCond signal from a different thread\n");
   printf("expected: no TSan race and no wrong-thread resume\n");
   printf("actual: %s; inspect sanitizer output\n",
          risk::child_status_text(status).c_str());
-  printf("status: %s\n",
-         risk::child_exited_cleanly(status) ? "not reproduced" : "confirmed");
+  printf("status: %s\n", confirmed ? "confirmed" : "not reproduced");
   printf("regression: risk-diagnose\n\n");
+  return confirmed;
 }
 
 static void run_schedule_thread_local_probe() {
@@ -203,10 +208,10 @@ static void run_schedule_thread_local_probe() {
 
 int main(int argc, char **argv) {
   if (argc == 2 && std::string(argv[1]) == "cond-only") {
-    run_cond_cross_thread_probe();
-    return 0;
+    return run_cond_cross_thread_probe() ? 1 : 0;
   }
 
+  bool confirmed = false;
   run_env_leak_probe();
   printf("RISK-ID: P1-ENV-LEAK\n");
   printf("scenario: coroutine private environment leak\n");
@@ -215,10 +220,10 @@ int main(int argc, char **argv) {
   printf("status: not reproduced without leak report\n");
   printf("regression: risk-diagnose\n\n");
 
-  run_thread_env_probe();
-  run_hook_alloc_fd_leak_probe();
-  run_allocation_failure_probe();
-  run_cond_cross_thread_probe();
+  confirmed = run_thread_env_probe() || confirmed;
+  confirmed = run_hook_alloc_fd_leak_probe() || confirmed;
+  confirmed = run_allocation_failure_probe() || confirmed;
+  confirmed = run_cond_cross_thread_probe() || confirmed;
   run_schedule_thread_local_probe();
-  return 0;
+  return confirmed ? 1 : 0;
 }

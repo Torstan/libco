@@ -23,7 +23,7 @@ static int idle_loop(void *arg) {
              : 0;
 }
 
-static void run_idle_cpu_probe() {
+static bool run_idle_cpu_probe() {
   struct rusage before;
   struct rusage after;
   getrusage(RUSAGE_SELF, &before);
@@ -36,17 +36,18 @@ static void run_idle_cpu_probe() {
                    before.ru_stime.tv_sec * 1000000L + before.ru_stime.tv_usec;
   long after_us = after.ru_utime.tv_sec * 1000000L + after.ru_utime.tv_usec +
                   after.ru_stime.tv_sec * 1000000L + after.ru_stime.tv_usec;
+  bool confirmed = (after_us - before_us) > 50000;
   printf("RISK-ID: P2-IDLE-CPU\n");
   printf("scenario: empty event loop idle CPU\n");
   printf("expected: idle loop consumes little CPU while waiting\n");
   printf("actual: cpu_us=%ld duration_ms=%d\n", after_us - before_us,
          state.duration_ms);
-  printf("status: %s\n", (after_us - before_us) > 50000 ? "confirmed"
-                                                        : "not reproduced");
+  printf("status: %s\n", confirmed ? "confirmed" : "not reproduced");
   printf("regression: risk-diagnose\n\n");
+  return confirmed;
 }
 
-static void run_run_loop_cleanup_probe() {
+static bool run_run_loop_cleanup_probe() {
   static int destructed = 0;
   struct Counter {
     ~Counter() { ++destructed; }
@@ -61,19 +62,21 @@ static void run_run_loop_cleanup_probe() {
   worker.run_loop(false);
   int after_second = destructed;
 
+  bool confirmed = after_second > after_first;
   printf("RISK-ID: P2-RUN-LOOP-CLEANUP\n");
   printf("scenario: run_loop(false) final coroutine cleanup\n");
   printf("expected: completed task coroutine is cleaned in the same run\n");
   printf("actual: destructed_after_first=%d destructed_after_second=%d\n",
          after_first, after_second);
-  printf("status: %s\n", after_second > after_first ? "confirmed"
-                                                    : "not reproduced");
+  printf("status: %s\n", confirmed ? "confirmed" : "not reproduced");
   printf("regression: risk-diagnose\n\n");
+  return confirmed;
 }
 
 int main() {
-  run_idle_cpu_probe();
-  run_run_loop_cleanup_probe();
+  bool confirmed = false;
+  confirmed = run_idle_cpu_probe() || confirmed;
+  confirmed = run_run_loop_cleanup_probe() || confirmed;
   printf("RISK-ID: P2-LONG-TIMEOUT\n");
   printf("scenario: timeout wheel long-timeout behavior\n");
   printf("expected: long timeout does not require repeated unexpected wakeups\n");
@@ -86,5 +89,5 @@ int main() {
   printf("actual: inspect CMakeLists.txt and Makefile for -m64 and architecture guards\n");
   printf("status: documented boundary\n");
   printf("regression: manual inspection\n");
-  return 0;
+  return confirmed ? 1 : 0;
 }
