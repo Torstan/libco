@@ -34,10 +34,19 @@ static void cleanup_finished_coroutines() {
     finished_coroutines.clear();
 }
 
-static void run_task_and_mark_finished(std::unique_ptr<Task> task) {
-    task->run();
+static void mark_current_coroutine_finished() {
     active_coroutine_count--;
     finished_coroutines.push_back(co_self());
+}
+
+static void run_task_and_mark_finished(std::unique_ptr<Task> task) {
+    try {
+        task->run();
+    } catch (...) {
+        mark_current_coroutine_finished();
+        throw;
+    }
+    mark_current_coroutine_finished();
 }
 
 static Coroutine* create_task_coroutine(std::unique_ptr<Task> task) {

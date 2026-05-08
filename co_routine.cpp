@@ -59,8 +59,11 @@ static int CoRoutineFunc(void *arg, void *) {
 }
 
 int Coroutine::Run() {
-  if (func_) {
-    func_();
+  try {
+    if (func_) {
+      func_();
+    }
+  } catch (...) {
   }
   ended_ = true;
   co_yield_ct();
