@@ -39,7 +39,7 @@ PROGS = test_co_routine test_co_async test_co_poll test_public_api
 
 all:$(PROGS)
 
-.PHONY: all check clean dist
+.PHONY: all check risk-check risk-diagnose clean dist
 
 test_co_routine:test_co_routine.o
 	$(BUILDEXE)
@@ -56,7 +56,14 @@ test_public_api:test_public_api.o
 check: all
 	@set -e; for prog in $(PROGS); do echo "RUN $$prog"; ./$$prog; done
 
+risk-check:
+	$(MAKE) -C risk check
+
+risk-diagnose:
+	$(MAKE) -C risk diagnose
+
 dist: clean
 
 clean:
 	$(CLEAN) *.o $(PROGS)
+	$(MAKE) -C risk clean
