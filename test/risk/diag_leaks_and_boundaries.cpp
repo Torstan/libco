@@ -222,12 +222,16 @@ int main(int argc, char **argv) {
     return run_cond_cross_thread_probe() ? 1 : 0;
   }
 
+  bool leak_only = argc == 2 && std::string(argv[1]) == "leak-only";
+  bool asan_leak_only = argc == 2 && std::string(argv[1]) == "asan-leak-only";
   bool confirmed = false;
   run_env_leak_probe();
-  print_env_leak_result();
+  if (!asan_leak_only) {
+    print_env_leak_result();
+  }
 
   confirmed = run_thread_env_probe() || confirmed;
-  if (argc == 2 && std::string(argv[1]) == "leak-only") {
+  if (leak_only || asan_leak_only) {
     return confirmed ? 1 : 0;
   }
 
