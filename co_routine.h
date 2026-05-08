@@ -33,6 +33,11 @@ namespace co {
 typedef int (*pfn_co_eventloop_t)(void *);
 
 class EpollCtx;
+class Coroutine;
+struct CoroutineDeleter {
+  void operator()(Coroutine *co) const;
+};
+class ThreadEnvTls;
 
 // Coroutine class - encapsulates coroutine state and lifecycle
 class Coroutine {
@@ -75,6 +80,7 @@ private:
   std::unique_ptr<StackMem> stack_mem_;
 
   friend class ThreadEnv;
+  friend struct CoroutineDeleter;
 };
 
 // ThreadEnv - per-thread coroutine environment (epoll + scheduler state)
@@ -88,7 +94,9 @@ private:
   ThreadEnv();
   ~ThreadEnv();
   std::unique_ptr<EpollCtx> epoll_ctx_;
+  std::unique_ptr<Coroutine, CoroutineDeleter> main_coroutine_;
   friend class Coroutine;
+  friend class ThreadEnvTls;
 };
 
 // hook syscall ( poll/read/write/recv/send/recvfrom/sendto )

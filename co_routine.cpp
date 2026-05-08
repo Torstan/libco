@@ -50,7 +50,14 @@ int co_accept(int fd, struct sockaddr *addr, socklen_t *len);
 
 namespace co {
 
-static thread_local ThreadEnv *gCoEnvPerThread = nullptr;
+class ThreadEnvTls {
+public:
+  ~ThreadEnvTls() { delete env; }
+
+  ThreadEnv *env{nullptr};
+};
+
+static thread_local ThreadEnvTls gCoEnvPerThread;
 static constexpr int kDefaultStackSize = 256 * 1024;
 
 static int CoRoutineFunc(void *arg, void *) {
@@ -82,6 +89,8 @@ Coroutine::Coroutine(std::function<void()>&& func)
 
 Coroutine::~Coroutine() {
 }
+
+void CoroutineDeleter::operator()(Coroutine *co) const { delete co; }
 
 Coroutine *Coroutine::Create(std::function<void()>&& func) {
   if (!ThreadEnv::Current()) {
@@ -131,17 +140,22 @@ int co_accept(int fd, struct sockaddr *addr, socklen_t *len) {
 ThreadEnv::ThreadEnv() : epoll_ctx_(std::make_unique<EpollCtx>()) {}
 
 ThreadEnv::~ThreadEnv() {
+  ThreadWorker::current_context = nullptr;
 }
 
-ThreadEnv *ThreadEnv::Current() { return gCoEnvPerThread; }
+ThreadEnv *ThreadEnv::Current() { return gCoEnvPerThread.env; }
 
 void ThreadEnv::Init() {
-  ThreadEnv *env = new ThreadEnv();
-  gCoEnvPerThread = env;
+  if (gCoEnvPerThread.env) {
+    return;
+  }
 
-  Coroutine *self = new Coroutine([](){});
-  self->SetMain();
-  ThreadWorker::current_context = &self->routine_ctx_;
+  gCoEnvPerThread.env = new ThreadEnv();
+  ThreadEnv *env = gCoEnvPerThread.env;
+
+  env->main_coroutine_.reset(new Coroutine([](){}));
+  env->main_coroutine_->SetMain();
+  ThreadWorker::current_context = &env->main_coroutine_->routine_ctx_;
 }
 
 // int poll(struct pollfd fds[], nfds_t nfds, int timeout);
