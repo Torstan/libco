@@ -97,10 +97,16 @@ Coroutine::~Coroutine() {
 void CoroutineDeleter::operator()(Coroutine *co) const { delete co; }
 
 Coroutine *Coroutine::Create(std::function<void()>&& func) {
-  if (!ThreadEnv::Current()) {
-    ThreadEnv::Init();
+  try {
+    if (!ThreadEnv::Current() && !ThreadEnv::Init()) {
+      errno = ENOMEM;
+      return nullptr;
+    }
+    return new Coroutine(std::move(func));
+  } catch (const std::bad_alloc &) {
+    errno = ENOMEM;
+    return nullptr;
   }
-  return new Coroutine(std::move(func));
 }
 
 Coroutine *Coroutine::Self() {
@@ -149,17 +155,27 @@ ThreadEnv::~ThreadEnv() {
 
 ThreadEnv *ThreadEnv::Current() { return gCoEnvPerThread.env; }
 
-void ThreadEnv::Init() {
+bool ThreadEnv::Init() {
   if (gCoEnvPerThread.env) {
-    return;
+    return true;
   }
 
-  gCoEnvPerThread.env = new ThreadEnv();
-  ThreadEnv *env = gCoEnvPerThread.env;
-
-  env->main_coroutine_.reset(new Coroutine([](){}));
-  env->main_coroutine_->SetMain();
-  ThreadWorker::current_context = &env->main_coroutine_->routine_ctx_;
+  try {
+    ThreadEnv *env = new ThreadEnv();
+    try {
+      env->main_coroutine_.reset(new Coroutine([](){}));
+    } catch (...) {
+      delete env;
+      throw;
+    }
+    env->main_coroutine_->SetMain();
+    ThreadWorker::current_context = &env->main_coroutine_->routine_ctx_;
+    gCoEnvPerThread.env = env;
+    return true;
+  } catch (const std::bad_alloc &) {
+    errno = ENOMEM;
+    return false;
+  }
 }
 
 // int poll(struct pollfd fds[], nfds_t nfds, int timeout);
@@ -408,17 +424,27 @@ static void CleanupPoll(EpollCtx *ep_ctx, struct pollfd fds[], PollBase *poll) {
 
 int co_poll_inner(struct pollfd fds[], nfds_t nfds, int timeout,
                   poll_func_t poll_func) {
-  EpollCtx *ep_ctx = co_get_epoll_ct();
   if (timeout == 0) {
     return poll_func ? poll_func(fds, nfds, timeout)
                      : SystemPoll(fds, nfds, timeout);
+  }
+  EpollCtx *ep_ctx = co_get_epoll_ct();
+  if (!ep_ctx) {
+    errno = ENOMEM;
+    return -1;
   }
   if (timeout < 0) {
     timeout = INT_MAX;
   }
 
-  PollState state(ep_ctx, fds, nfds, co_self());
-  PollBase *poll = state.poll();
+  std::unique_ptr<PollState> state;
+  try {
+    state.reset(new PollState(ep_ctx, fds, nfds, co_self()));
+  } catch (const std::bad_alloc &) {
+    errno = ENOMEM;
+    return -1;
+  }
+  PollBase *poll = state->poll();
 
   int fallback_ret = 0;
   PollRegisterResult register_result =
@@ -548,6 +574,10 @@ static void DispatchActiveItems(EpollCtx *ep_ctx, unsigned long long now,
 
 void co_eventloop(pfn_co_eventloop_t func, void *arg) {
   EpollCtx *ep_ctx = co_get_epoll_ct();
+  if (!ep_ctx) {
+    errno = ENOMEM;
+    return;
+  }
 
   for (;;) {
     int ret = ep_ctx->wait(1);
@@ -572,8 +602,8 @@ void co_eventloop(pfn_co_eventloop_t func, void *arg) {
 }
 
 EpollCtx *co_get_epoll_ct() {
-  if (!ThreadEnv::Current()) {
-    ThreadEnv::Init();
+  if (!ThreadEnv::Current() && !ThreadEnv::Init()) {
+    return nullptr;
   }
   return ThreadEnv::Current()->Epoll();
 }

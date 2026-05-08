@@ -6,6 +6,7 @@
 #include "thread_worker.h"
 
 #include <atomic>
+#include <exception>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -115,27 +116,75 @@ static bool run_hook_alloc_fd_leak_probe() {
 }
 
 static bool run_allocation_failure_probe() {
+  enum AllocProbeExit {
+    kControlledEnomem = 0,
+    kReturnedNullWrongErrno = 10,
+    kStdExceptionEscaped = 11,
+    kNonStdExceptionEscaped = 12,
+    kNoAllocationFailure = 13,
+  };
+
   int status = risk::run_child_with_timeout(
       []() {
         struct rlimit limit;
         limit.rlim_cur = 8 * 1024 * 1024;
         limit.rlim_max = 8 * 1024 * 1024;
         setrlimit(RLIMIT_AS, &limit);
-        std::vector<Coroutine *> routines;
-        for (int i = 0; i < 100000; ++i) {
-          routines.push_back(co_create([]() {}));
+        try {
+          Coroutine *routines[4096] = {};
+          for (int i = 0; i < 4096; ++i) {
+            errno = 0;
+            Coroutine *routine = co_create([]() {});
+            if (!routine) {
+              _exit(errno == ENOMEM ? kControlledEnomem
+                                    : kReturnedNullWrongErrno);
+            }
+            routines[i] = routine;
+          }
+          if (routines[0]) {
+            co_free(routines[0]);
+          }
+        } catch (const std::exception &) {
+          _exit(kStdExceptionEscaped);
+        } catch (...) {
+          _exit(kNonStdExceptionEscaped);
         }
-        for (Coroutine *routine : routines) {
-          co_free(routine);
-        }
+        _exit(kNoAllocationFailure);
       },
       1500);
 
-  bool confirmed = !risk::child_exited_cleanly(status);
+  std::string actual;
+  bool confirmed = true;
+  if (WIFEXITED(status)) {
+    switch (WEXITSTATUS(status)) {
+    case kControlledEnomem:
+      actual = "co_create returned nullptr with errno=ENOMEM";
+      confirmed = false;
+      break;
+    case kReturnedNullWrongErrno:
+      actual = "co_create returned nullptr without errno=ENOMEM";
+      break;
+    case kStdExceptionEscaped:
+      actual = "co_create threw std::exception";
+      break;
+    case kNonStdExceptionEscaped:
+      actual = "co_create threw non-std exception";
+      break;
+    case kNoAllocationFailure:
+      actual = "allocation failure was not reached";
+      break;
+    default:
+      actual = risk::child_status_text(status);
+      break;
+    }
+  } else {
+    actual = risk::child_status_text(status);
+  }
+
   printf("RISK-ID: P1-ALLOC-FAILURE\n");
   printf("scenario: allocation failure safety\n");
   printf("expected: allocation failure reports a controlled error\n");
-  printf("actual: %s\n", risk::child_status_text(status).c_str());
+  printf("actual: %s\n", actual.c_str());
   printf("status: %s\n", confirmed ? "confirmed" : "not reproduced");
   printf("regression: risk-diagnose\n\n");
   return confirmed;
@@ -220,6 +269,9 @@ int main(int argc, char **argv) {
 
   if (argc == 2 && std::string(argv[1]) == "cond-only") {
     return run_cond_cross_thread_probe() ? 1 : 0;
+  }
+  if (argc == 2 && std::string(argv[1]) == "alloc-only") {
+    return run_allocation_failure_probe() ? 1 : 0;
   }
 
   bool leak_only = argc == 2 && std::string(argv[1]) == "leak-only";

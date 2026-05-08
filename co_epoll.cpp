@@ -41,10 +41,17 @@ static int co_epoll_create(int size) { return epoll_create(size); }
 static struct co_epoll_res *co_epoll_res_alloc(int n) {
   struct co_epoll_res *ptr =
       (struct co_epoll_res *)malloc(sizeof(struct co_epoll_res));
+  if (!ptr) {
+    return nullptr;
+  }
 
   ptr->size = n;
   ptr->events = (struct epoll_event *)calloc(1, n * sizeof(struct epoll_event));
   ptr->eventlist = nullptr;
+  if (!ptr->events) {
+    free(ptr);
+    return nullptr;
+  }
 
   return ptr;
 }
@@ -256,10 +263,23 @@ static int co_epoll_ctl(int epfd, int op, int fd, struct epoll_event *ev) {
 static struct co_epoll_res *co_epoll_res_alloc(int n) {
   struct co_epoll_res *ptr =
       (struct co_epoll_res *)malloc(sizeof(struct co_epoll_res));
+  if (!ptr) {
+    return nullptr;
+  }
 
   ptr->size = n;
   ptr->events = (struct epoll_event *)calloc(1, n * sizeof(struct epoll_event));
   ptr->eventlist = (struct kevent *)calloc(1, n * sizeof(struct kevent));
+  if (!ptr->events || !ptr->eventlist) {
+    if (ptr->events) {
+      free(ptr->events);
+    }
+    if (ptr->eventlist) {
+      free(ptr->eventlist);
+    }
+    free(ptr);
+    return nullptr;
+  }
 
   return ptr;
 }
@@ -296,6 +316,10 @@ EpollCtx::~EpollCtx() {
 int EpollCtx::wait(int timeout_ms) {
   if (!result_) {
     result_ = co_epoll_res_alloc(MAX_EVENTS);
+    if (!result_) {
+      errno = ENOMEM;
+      return -1;
+    }
   }
   return co_epoll_wait(epoll_fd_, result_, MAX_EVENTS, timeout_ms);
 }

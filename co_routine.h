@@ -87,7 +87,7 @@ private:
 class ThreadEnv {
 public:
   static ThreadEnv *Current();
-  static void Init();
+  static bool Init();
   EpollCtx *Epoll() { return epoll_ctx_.get(); }
 
 private:
