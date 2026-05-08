@@ -115,6 +115,11 @@ static risk::Result zero_timeout_child_check() {
     _exit(ret == 0 ? 0 : 3);
   }, 1000);
   std::string actual = risk::child_status_text(status);
+  if (WIFEXITED(status) && WEXITSTATUS(status) == 2) {
+    return risk::needs_environment(
+        "P1-POLL-ZERO-TIMEOUT", "`co_poll(timeout=0)` semantics",
+        "pipe can be created", actual, "risk-check");
+  }
   if (!risk::child_exited_cleanly(status)) {
     return risk::confirmed(
         "P1-POLL-ZERO-TIMEOUT", "`co_poll(timeout=0)` semantics",
@@ -130,6 +135,8 @@ static risk::Result zero_timeout_child_check() {
 struct PollOnceState {
   struct pollfd pfd;
   int timeout_ms{5};
+  unsigned long long start_ms{0};
+  unsigned long long max_ms{100};
   int ret{-99};
   short revents{0};
   bool done{false};
@@ -137,10 +144,17 @@ struct PollOnceState {
 
 static int poll_once_loop(void *arg) {
   PollOnceState *state = static_cast<PollOnceState *>(arg);
-  return state->done ? -1 : 0;
+  if (state->done) {
+    return -1;
+  }
+  if (GetTickMS() - state->start_ms >= state->max_ms) {
+    return -1;
+  }
+  return 0;
 }
 
 static void run_co_poll_once(PollOnceState *state) {
+  state->start_ms = GetTickMS();
   Coroutine *routine = co_create([state]() {
     state->ret = co_poll(&state->pfd, 1, state->timeout_ms);
     state->revents = state->pfd.revents;
@@ -148,7 +162,9 @@ static void run_co_poll_once(PollOnceState *state) {
   });
   co_resume(routine);
   co_eventloop(poll_once_loop, state);
-  co_free(routine);
+  if (state->done) {
+    co_free(routine);
+  }
 }
 
 static risk::Result closed_fd_poll_semantics() {
@@ -174,9 +190,11 @@ static risk::Result closed_fd_poll_semantics() {
 
   char actual[256];
   snprintf(actual, sizeof(actual),
-           "system ret=%d revents=0x%x; co_poll ret=%d revents=0x%x",
-           sys_ret, sys_pfd.revents, co_state.ret, co_state.revents);
-  bool matches = sys_ret == co_state.ret && sys_pfd.revents == co_state.revents;
+           "system ret=%d revents=0x%x; co_poll ret=%d revents=0x%x done=%d",
+           sys_ret, sys_pfd.revents, co_state.ret, co_state.revents,
+           co_state.done ? 1 : 0);
+  bool matches = co_state.done && sys_ret == co_state.ret &&
+                 sys_pfd.revents == co_state.revents;
   if (!matches) {
     return risk::confirmed(
         "P1-POLL-FD-SEMANTICS", "closed fd polling semantics",
@@ -208,9 +226,11 @@ static risk::Result regular_fd_poll_semantics() {
 
   char actual[256];
   snprintf(actual, sizeof(actual),
-           "system ret=%d revents=0x%x; co_poll ret=%d revents=0x%x",
-           sys_ret, sys_pfd.revents, co_state.ret, co_state.revents);
-  bool matches = sys_ret == co_state.ret && sys_pfd.revents == co_state.revents;
+           "system ret=%d revents=0x%x; co_poll ret=%d revents=0x%x done=%d",
+           sys_ret, sys_pfd.revents, co_state.ret, co_state.revents,
+           co_state.done ? 1 : 0);
+  bool matches = co_state.done && sys_ret == co_state.ret &&
+                 sys_pfd.revents == co_state.revents;
   if (!matches) {
     return risk::confirmed(
         "P1-POLL-FD-SEMANTICS", "regular fd polling semantics",
