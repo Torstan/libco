@@ -64,10 +64,15 @@ Run diagnostic checks:
 timeout 30s make risk-diagnose
 ```
 
-Expected result: nonzero when diagnostic risks are confirmed. On the current
-sandbox this reproduces:
+Expected result: nonzero when diagnostic risks are confirmed. The current
+branch fixed this diagnostic risk:
 
-- `P1-THREADENV-LEAK`: fd count grows after short-lived coroutine threads.
+- `P1-THREADENV-LEAK`: fixed by `504bcdb` and `6fdf213`; per-thread
+  `ThreadEnv` is released during thread-local teardown, so short-lived
+  coroutine threads no longer leave epoll fds open.
+
+On the current sandbox this still reproduces:
+
 - `P1-ALLOC-FAILURE`: constrained allocation failure terminates the child
   process instead of returning a controlled error.
 - `P1-COND-CROSS-THREAD`: cross-thread `CoCond::Signal()` is unsafe and may
