@@ -99,6 +99,9 @@ Coroutine *Coroutine::Self() {
 void Coroutine::Yield() { routine_ctx_.switch_out(); }
 
 void Coroutine::Resume() {
+  if (ended_) {
+    return;
+  }
   if (!started_) {
     routine_ctx_.MakeCtx((coctx_func_t)CoRoutineFunc, this);
     started_ = true;
