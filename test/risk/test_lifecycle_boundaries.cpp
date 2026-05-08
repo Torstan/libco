@@ -114,33 +114,46 @@ bool has_future_no_context_message(const std::string &message) {
 }
 
 FutureNoContextPathResult probe_future_without_context_path(
-    const char *path_name, const std::function<void(Future<int> &)> &wait_fn) {
+    const std::function<void(Future<int> &)> &wait_fn) {
   Promise<int> promise;
   Future<int> future = promise.get_future();
   try {
     wait_fn(future);
     return FutureNoContextPathResult{
-        false, kFutureNoContextReturned,
-        std::string(path_name) + ": invalid state: call returned"};
+        false, kFutureNoContextReturned, "invalid state: call returned"};
   } catch (const std::logic_error &ex) {
     std::string message = ex.what();
     bool safe = has_future_no_context_message(message);
     return FutureNoContextPathResult{
         safe, safe ? kFutureNoContextSafe : kFutureNoContextUnclearException,
-        std::string(path_name) +
-            (safe ? ": caught expected std::logic_error: "
-                  : ": std::logic_error message missing no-context semantics: ") +
+        std::string(safe ? "caught expected std::logic_error: "
+                         : "std::logic_error message missing no-context semantics: ") +
             message};
   } catch (const std::exception &ex) {
     return FutureNoContextPathResult{
         false, kFutureNoContextUnclearException,
-        std::string(path_name) + ": caught unexpected std::exception: " +
-            ex.what()};
+        std::string("caught unexpected std::exception: ") + ex.what()};
   } catch (...) {
     return FutureNoContextPathResult{
-        false, kFutureNoContextNonStdException,
-        std::string(path_name) + ": caught non-std exception"};
+        false, kFutureNoContextNonStdException, "caught non-std exception"};
   }
+}
+
+ChildProbeResult run_future_without_context_path_probe(
+    const std::function<void(Future<int> &)> &wait_fn) {
+  return run_child_probe_with_timeout(
+      [&wait_fn](int out_fd) {
+        FutureNoContextPathResult result =
+            probe_future_without_context_path(wait_fn);
+        write_probe_actual(out_fd, result.actual);
+        return result.exit_code;
+      },
+      1000);
+}
+
+std::string future_no_context_actual(const char *path_name,
+                                     const ChildProbeResult &child) {
+  return std::string(path_name) + ": " + child.output;
 }
 
 } // namespace
@@ -168,29 +181,16 @@ static risk::Result resume_ended_coroutine() {
 }
 
 static risk::Result future_without_context() {
-  ChildProbeResult child = run_child_probe_with_timeout(
-      [](int out_fd) {
-        FutureNoContextPathResult get_result =
-            probe_future_without_context_path(
-                "future.get()", [](Future<int> &future) { (void)future.get(); });
-        FutureNoContextPathResult wait_result =
-            probe_future_without_context_path(
-                "future.wait()", [](Future<int> &future) { future.wait(); });
+  ChildProbeResult get_child = run_future_without_context_path_probe(
+      [](Future<int> &future) { (void)future.get(); });
+  ChildProbeResult wait_child = run_future_without_context_path_probe(
+      [](Future<int> &future) { future.wait(); });
 
-        write_probe_actual(out_fd,
-                           get_result.actual + "; " + wait_result.actual);
-
-        if (!get_result.safe) {
-          return get_result.exit_code;
-        }
-        if (!wait_result.safe) {
-          return wait_result.exit_code;
-        }
-        return static_cast<int>(kFutureNoContextSafe);
-      },
-      1000);
-  std::string actual = child.output;
-  if (!risk::child_exited_cleanly(child.status)) {
+  std::string actual = future_no_context_actual("future.get()", get_child) +
+                       "; " +
+                       future_no_context_actual("future.wait()", wait_child);
+  if (!risk::child_exited_cleanly(get_child.status) ||
+      !risk::child_exited_cleanly(wait_child.status)) {
     return risk::confirmed(
         "P1-FUTURE-NO-CONTEXT",
         "`Future::get()` and `Future::wait()` outside coroutine context",
