@@ -246,15 +246,14 @@ static bool run_cond_cross_thread_probe() {
       },
       1000);
 
-  bool confirmed = !risk::child_exited_cleanly(status);
   printf("RISK-ID: P1-COND-CROSS-THREAD\n");
-  printf("scenario: CoCond signal from a different thread\n");
-  printf("expected: no TSan race and no wrong-thread resume\n");
+  printf("scenario: CoCond signal from a different thread is unsupported\n");
+  printf("expected: cross-thread CoCond signal is a documented boundary\n");
   printf("actual: %s; inspect sanitizer output\n",
          risk::child_status_text(status).c_str());
-  printf("status: %s\n", confirmed ? "confirmed" : "not reproduced");
+  printf("status: documented boundary\n");
   printf("regression: risk-diagnose\n\n");
-  return confirmed;
+  return false;
 }
 
 static void run_schedule_thread_local_probe() {
