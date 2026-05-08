@@ -51,10 +51,9 @@ The current branch also fixed this lifecycle risk:
   propagation is required.
 - `P1-PROMISE-ABANDONED`: fixed by `01df2a2`; abandoned pending promises now
   complete the future with a broken-promise exception.
-
-The same command still reproduces these lifecycle risks:
-
-- `P1-FUTURE-NO-CONTEXT`: `Future::get()` outside coroutine context aborts.
+- `P1-FUTURE-NO-CONTEXT`: fixed by `b871db1`; not-ready
+  `Future::get()` and `Future::wait()` outside coroutine context now throw a
+  semantic `std::logic_error` instead of asserting, aborting, or hanging.
 
 Hook syscall checks may print `needs environment` if the host denies socket or
 bind operations.
