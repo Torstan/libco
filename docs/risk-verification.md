@@ -11,7 +11,7 @@ Status values: `not run`, `confirmed`, `not reproduced`, `needs environment`,
 | P0-HOOK-CLOSE-STALE | P0 | `close()` leaves stale hook metadata when hook is disabled | `make risk-check` | needs environment | `timeout 20s test/risk/build/test_hook_syscall_semantics`: socket failed with `EPERM`; child exited status 2 |
 | P0-POLL-SAME-FD | P0 | Two coroutines poll the same fd | `make risk-check` | confirmed | `make risk-check` |
 | P0-HOOK-ALLOC-FD-LEAK | P0 | Hook metadata allocation failure leaks fd | `make risk-diagnose` | not run | |
-| P0-RESUME-ENDED | P0 | Resume ended coroutine | `make risk-check` | not run | |
+| P0-RESUME-ENDED | P0 | Resume ended coroutine | `make risk-check` | confirmed | `timeout 20s test/risk/build/test_lifecycle_boundaries`: child terminated by signal 11 |
 | P1-POLL-ZERO-TIMEOUT | P1 | `co_poll(timeout=0)` semantics | `make risk-check` | confirmed | `make risk-check` |
 | P1-POLL-FD-SEMANTICS | P1 | Invalid, closed, and regular fd polling semantics | `make risk-check` | confirmed | `make risk-check` |
 | P1-CONNECT-ERRNO | P1 | Hooked `connect()` errno behavior | `make risk-check` | needs environment | `timeout 20s test/risk/build/test_hook_syscall_semantics`: bind local port failed with `EPERM`; child exited status 2 |
@@ -19,9 +19,9 @@ Status values: `not run`, `confirmed`, `not reproduced`, `needs environment`,
 | P1-ENV-LEAK | P1 | Coroutine private environment leak | `scripts/risk/run_asan_lsan.sh` | not run | |
 | P1-THREADENV-LEAK | P1 | Per-thread `ThreadEnv` leak | `scripts/risk/run_asan_lsan.sh` | not run | |
 | P1-COND-CROSS-THREAD | P1 | `CoCond` cross-thread signal | `scripts/risk/run_tsan.sh` | not run | |
-| P1-FUTURE-NO-CONTEXT | P1 | `Future::get()` outside coroutine context | `make risk-check` | not run | |
-| P1-PROMISE-ABANDONED | P1 | Abandoned promise behavior | `make risk-check` | not run | |
-| P1-COROUTINE-THROW | P1 | Exception crossing coroutine boundary | `make risk-check` | not run | |
+| P1-FUTURE-NO-CONTEXT | P1 | `Future::get()` outside coroutine context | `make risk-check` | confirmed | `timeout 20s test/risk/build/test_lifecycle_boundaries`: `co::Future<int>::wait()` assertion `thread_ctx` failed; child terminated by signal 6 |
+| P1-PROMISE-ABANDONED | P1 | Abandoned promise behavior | `make risk-check` | confirmed | `timeout 20s test/risk/build/test_lifecycle_boundaries`: `co::Future<int>::wait()` assertion `thread_ctx` failed; child terminated by signal 6 |
+| P1-COROUTINE-THROW | P1 | Exception crossing coroutine boundary | `make risk-check` | confirmed | `timeout 20s test/risk/build/test_lifecycle_boundaries`: uncaught `std::runtime_error("boom")`; child terminated by signal 6 |
 | P1-ALLOC-FAILURE | P1 | Allocation failure safety | `make risk-diagnose` | not run | |
 | P2-IDLE-CPU | P2 | Event loop idle CPU | `make risk-diagnose` | not run | |
 | P2-LONG-TIMEOUT | P2 | Timeout wheel long-timeout behavior | `make risk-diagnose` | not run | |
