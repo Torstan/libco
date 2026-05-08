@@ -122,6 +122,7 @@ static bool run_allocation_failure_probe() {
     kStdExceptionEscaped = 11,
     kNonStdExceptionEscaped = 12,
     kNoAllocationFailure = 13,
+    kSetrlimitFailed = 14,
   };
 
   int status = risk::run_child_with_timeout(
@@ -129,7 +130,9 @@ static bool run_allocation_failure_probe() {
         struct rlimit limit;
         limit.rlim_cur = 8 * 1024 * 1024;
         limit.rlim_max = 8 * 1024 * 1024;
-        setrlimit(RLIMIT_AS, &limit);
+        if (setrlimit(RLIMIT_AS, &limit) != 0) {
+          _exit(kSetrlimitFailed);
+        }
         try {
           Coroutine *routines[4096] = {};
           for (int i = 0; i < 4096; ++i) {
@@ -157,11 +160,18 @@ static bool run_allocation_failure_probe() {
 
   std::string actual;
   bool confirmed = true;
+  const char *status_text = "confirmed";
   if (WIFEXITED(status)) {
     switch (WEXITSTATUS(status)) {
     case kControlledEnomem:
       actual = "co_create returned nullptr with errno=ENOMEM";
       confirmed = false;
+      status_text = "not reproduced";
+      break;
+    case kSetrlimitFailed:
+      actual = "setrlimit(RLIMIT_AS) failed";
+      confirmed = false;
+      status_text = "needs environment";
       break;
     case kReturnedNullWrongErrno:
       actual = "co_create returned nullptr without errno=ENOMEM";
@@ -187,7 +197,7 @@ static bool run_allocation_failure_probe() {
   printf("scenario: allocation failure safety\n");
   printf("expected: allocation failure reports a controlled error\n");
   printf("actual: %s\n", actual.c_str());
-  printf("status: %s\n", confirmed ? "confirmed" : "not reproduced");
+  printf("status: %s\n", status_text);
   printf("regression: risk-diagnose\n\n");
   return confirmed;
 }

@@ -597,8 +597,12 @@ void co_eventloop(pfn_co_eventloop_t func, void *arg) {
     int ret = ep_ctx->wait(1);
     if (ret < 0) {
       int wait_errno = errno;
-      errno = wait_errno;
-      break;
+      if (wait_errno == EINTR) {
+        ret = 0;
+      } else {
+        errno = wait_errno;
+        break;
+      }
     }
 
     TimeoutItemLink *active = ep_ctx->active_list();
