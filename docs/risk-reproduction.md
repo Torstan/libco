@@ -65,18 +65,21 @@ timeout 30s make risk-diagnose
 ```
 
 Expected result: nonzero when diagnostic risks are confirmed. The current
-branch fixed this diagnostic risk:
+branch fixed these diagnostic risks:
 
 - `P1-THREADENV-LEAK`: fixed by `504bcdb` and `6fdf213`; per-thread
   `ThreadEnv` is released during thread-local teardown, so short-lived
   coroutine threads no longer leave epoll fds open.
+- `P1-ALLOC-FAILURE`: fixed by `df37828`, `bde5dc5`, `cb7829a`, and
+  `6911a88`; constrained allocation failure now returns a controlled
+  `nullptr`/`ENOMEM` result instead of aborting on `std::bad_alloc`.
 
-On the current sandbox this still reproduces:
+The current branch documents this diagnostic boundary:
 
-- `P1-ALLOC-FAILURE`: constrained allocation failure terminates the child
-  process instead of returning a controlled error.
-- `P1-COND-CROSS-THREAD`: cross-thread `CoCond::Signal()` is unsafe and may
-  crash; TSan gives stronger evidence via the TSan wrapper.
+- `P1-COND-CROSS-THREAD`: libco coroutines and `CoCond` are designed for use
+  within one thread. Cross-thread `CoCond::Signal()` is outside the supported
+  contract, so the probe remains a boundary check rather than a supported
+  behavior to fix.
 
 The same command also records non-reproduced or documented-boundary results for
 P2 probes.
@@ -99,11 +102,13 @@ Useful narrowed modes:
 
 ```bash
 timeout 10s test/risk/build/diag_leaks_and_boundaries leak-only
+timeout 10s test/risk/build/diag_leaks_and_boundaries alloc-only
 timeout 10s test/risk/build/diag_leaks_and_boundaries cond-only
 ```
 
 The `leak-only` mode runs only coroutine env and `ThreadEnv` probes. The
-`cond-only` mode isolates the cross-thread `CoCond` probe for TSan.
+`alloc-only` mode isolates allocation-failure handling. The `cond-only` mode
+isolates the unsupported cross-thread `CoCond` boundary probe.
 
 ## Sanitizer and Trace Reproduction
 
@@ -120,7 +125,8 @@ Logs:
 
 Expected result: nonzero when TSan reports or a diagnostic risk is confirmed.
 In this sandbox, the hook fd race probe is environment-limited because hooked
-socket creation fails, while the `CoCond` diagnostic is confirmed.
+socket creation fails; the `CoCond` cross-thread diagnostic is documented as an
+unsupported single-thread design boundary.
 
 Run ASan/UBSan/LSan diagnostics:
 
@@ -188,5 +194,6 @@ The current environment has these limitations:
 - LSan can emit `LeakSanitizer has encountered a fatal error`, so
   `P1-ENV-LEAK` remains `needs environment`.
 
-The confirmed poll, lifecycle, ThreadEnv, allocation, and `CoCond` issues are
-still reproducible without those missing capabilities.
+No confirmed poll, lifecycle, ThreadEnv, allocation, or `CoCond` support bug
+remains reproducible without those missing capabilities. The `CoCond`
+cross-thread probe is retained as an unsupported-boundary check.
