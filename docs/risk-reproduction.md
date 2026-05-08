@@ -43,9 +43,12 @@ The current branch fixed these poll risks:
 - `P1-POLL-ZERO-TIMEOUT`: fixed by `4e44aa2` and `32d93ec`.
 - `P1-POLL-FD-SEMANTICS`: fixed by `4e44aa2` and `32d93ec`.
 
+The current branch also fixed this lifecycle risk:
+
+- `P0-RESUME-ENDED`: fixed by `294ab24`.
+
 The same command still reproduces these lifecycle risks:
 
-- `P0-RESUME-ENDED`: resuming an ended coroutine terminates the child process.
 - `P1-FUTURE-NO-CONTEXT`: `Future::get()` outside coroutine context aborts.
 - `P1-PROMISE-ABANDONED`: abandoned promise aborts instead of reporting a
   bounded broken-promise result.
