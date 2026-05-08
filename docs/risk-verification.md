@@ -20,7 +20,7 @@ Status values: `not run`, `confirmed`, `not reproduced`, `needs environment`,
 | P1-THREADENV-LEAK | P1 | Per-thread `ThreadEnv` leak | `scripts/risk/run_asan_lsan.sh` | not run | |
 | P1-COND-CROSS-THREAD | P1 | `CoCond` cross-thread signal | `scripts/risk/run_tsan.sh` | not run | |
 | P1-FUTURE-NO-CONTEXT | P1 | `Future::get()` outside coroutine context | `make risk-check` | confirmed | `timeout 20s test/risk/build/test_lifecycle_boundaries`: `co::Future<int>::wait()` assertion `thread_ctx` failed; child terminated by signal 6 |
-| P1-PROMISE-ABANDONED | P1 | Abandoned promise behavior | `make risk-check` | confirmed | `timeout 20s test/risk/build/test_lifecycle_boundaries`: `co::Future<int>::wait()` assertion `thread_ctx` failed; child terminated by signal 6 |
+| P1-PROMISE-ABANDONED | P1 | Abandoned promise behavior | `make risk-check` | confirmed | `timeout 20s test/risk/build/test_lifecycle_boundaries`: abandoned future `get()` inside coroutine reaches `co::Future<int>::schedule()` assertion `_promise`; child terminated by signal 6 |
 | P1-COROUTINE-THROW | P1 | Exception crossing coroutine boundary | `make risk-check` | confirmed | `timeout 20s test/risk/build/test_lifecycle_boundaries`: uncaught `std::runtime_error("boom")`; child terminated by signal 6 |
 | P1-ALLOC-FAILURE | P1 | Allocation failure safety | `make risk-diagnose` | not run | |
 | P2-IDLE-CPU | P2 | Event loop idle CPU | `make risk-diagnose` | not run | |

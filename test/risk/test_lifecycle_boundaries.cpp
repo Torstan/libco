@@ -52,29 +52,46 @@ static risk::Result future_without_context() {
       actual, "risk-check");
 }
 
+struct AbandonedPromiseState {
+  bool done{false};
+};
+
+static int abandoned_promise_loop(void *arg) {
+  auto *state = static_cast<AbandonedPromiseState *>(arg);
+  return state->done ? -1 : 0;
+}
+
 static risk::Result abandoned_promise_behavior() {
   int status = risk::run_child_with_timeout(
       []() {
-        Future<int> *future_ptr = nullptr;
+        Future<int> *future = nullptr;
         {
           Promise<int> promise;
-          Future<int> future = promise.get_future();
-          future_ptr = new Future<int>(std::move(future));
+          future = new Future<int>(promise.get_future());
         }
-        (void)future_ptr->get();
-        delete future_ptr;
+
+        AbandonedPromiseState state;
+        Coroutine *routine = co_create([future, &state]() {
+          (void)future->get();
+          state.done = true;
+        });
+        co_resume(routine);
+        co_eventloop(abandoned_promise_loop, &state);
+
+        co_free(routine);
+        delete future;
       },
       1000);
   std::string actual = risk::child_status_text(status);
   if (!risk::child_exited_cleanly(status)) {
     return risk::confirmed(
         "P1-PROMISE-ABANDONED", "abandoned promise behavior",
-        "future observes a clear broken-promise result without abort or hang",
+        "future observes a clear broken-promise result or bounded wait without abort",
         actual, "risk-check");
   }
   return risk::not_reproduced(
       "P1-PROMISE-ABANDONED", "abandoned promise behavior",
-      "future observes a clear broken-promise result without abort or hang",
+      "future observes a clear broken-promise result or bounded wait without abort",
       actual, "risk-check");
 }
 
