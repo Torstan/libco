@@ -17,7 +17,9 @@ available.
 * limitations under the License.
 */
 
+#include "co_epoll.h"
 #include "co_routine.h"
+#include "co_timeout.h"
 #include "thread_worker.h"
 
 #include <errno.h>
@@ -46,6 +48,68 @@ struct stEndPoint {
   char *ip;
   unsigned short int port;
 };
+
+struct client_task_t {
+  Coroutine *co;
+  int fd;
+  TimeoutItem io_event;
+  struct epoll_event ev;
+};
+
+static int SetNonBlock(int fd) {
+  int flags = fcntl(fd, F_GETFL, 0);
+  if (flags < 0) {
+    return -1;
+  }
+  return fcntl(fd, F_SETFL, flags | O_NONBLOCK | O_NDELAY);
+}
+
+static void OnFdReady(TimeoutItem *item) {
+  client_task_t *task = static_cast<client_task_t *>(item->arg);
+  co_resume(task->co);
+}
+
+static bool RegisterReadEvent(client_task_t *task) {
+  TimeoutItemLink::remove(&task->io_event);
+  task->io_event.arg = task;
+  task->io_event.prepare_func = nullptr;
+  task->io_event.process_func = OnFdReady;
+  task->io_event.timeout = false;
+  task->ev = {0};
+  task->ev.data.ptr = &task->io_event;
+  task->ev.events = (EPOLLIN | EPOLLERR | EPOLLHUP);
+  return 0 == co_get_curr_thread_env()->Epoll()->add(task->fd, &task->ev);
+}
+
+static void CloseClient(client_task_t *task) {
+  if (task->fd < 0) {
+    return;
+  }
+  TimeoutItemLink::remove(&task->io_event);
+  co_get_curr_thread_env()->Epoll()->del(task->fd, &task->ev);
+  close(task->fd);
+  task->fd = -1;
+}
+
+static bool WriteAll(int fd, const char *buf, int len) {
+  int written = 0;
+  while (written < len) {
+    int ret = write(fd, buf + written, len - written);
+    if (ret > 0) {
+      written += ret;
+      continue;
+    }
+    if (-1 == ret && EAGAIN == errno) {
+      struct pollfd pf = {0};
+      pf.fd = fd;
+      pf.events = (POLLOUT | POLLERR | POLLHUP);
+      co_poll(&pf, 1, 1000);
+      continue;
+    }
+    return false;
+  }
+  return true;
+}
 
 static void SetAddr(const char *pszIP, const unsigned short shPort,
                     struct sockaddr_in &addr) {
@@ -91,30 +155,37 @@ static void *readwrite_routine(const stEndPoint& ep) {
   const stEndPoint *endpoint = &ep;
   char str[8] = "sarlmol";
   char buf[1024 * 16];
-  int fd = -1;
+  client_task_t task = {};
+  task.co = co_self();
+  task.fd = -1;
   int ret = 0;
   for (;;) {
-    if (fd < 0) {
-      fd = socket(PF_INET, SOCK_STREAM, 0);
+    if (task.fd < 0) {
+      task.fd = socket(PF_INET, SOCK_STREAM, 0);
+      if (task.fd < 0) {
+        AddFailCnt();
+        continue;
+      }
       struct sockaddr_in addr;
       SetAddr(endpoint->ip, endpoint->port, addr);
-      ret = connect(fd, (struct sockaddr *)&addr, sizeof(addr));
+      ret = connect(task.fd, (struct sockaddr *)&addr, sizeof(addr));
 
-      if (errno == EALREADY || errno == EINPROGRESS) {
+      if (ret < 0 && (errno == EALREADY || errno == EINPROGRESS)) {
         struct pollfd pf = {0};
-        pf.fd = fd;
+        pf.fd = task.fd;
         pf.events = (POLLOUT | POLLERR | POLLHUP);
         co_poll(&pf, 1, 200);
         // check connect
         int error = 0;
         uint32_t socklen = sizeof(error);
         errno = 0;
-        ret = getsockopt(fd, SOL_SOCKET, SO_ERROR, (void *)&error, &socklen);
+        ret = getsockopt(task.fd, SOL_SOCKET, SO_ERROR, (void *)&error,
+                         &socklen);
         if (ret == -1) {
           // printf("getsockopt ERROR ret %d %d:%s\n", ret, errno,
           // strerror(errno));
-          close(fd);
-          fd = -1;
+          close(task.fd);
+          task.fd = -1;
           AddFailCnt();
           continue;
         }
@@ -122,28 +193,50 @@ static void *readwrite_routine(const stEndPoint& ep) {
           errno = error;
           // printf("connect ERROR ret %d %d:%s\n", error, errno,
           // strerror(errno));
-          close(fd);
-          fd = -1;
+          close(task.fd);
+          task.fd = -1;
           AddFailCnt();
           continue;
         }
+      } else if (ret < 0) {
+        close(task.fd);
+        task.fd = -1;
+        AddFailCnt();
+        continue;
+      }
+
+      if (SetNonBlock(task.fd) != 0 || !RegisterReadEvent(&task)) {
+        close(task.fd);
+        task.fd = -1;
+        AddFailCnt();
+        continue;
       }
     }
 
     while (true) {
-      int ret = write(fd, str, sizeof(str));
-      if (ret > 0) {
-        ret = read(fd, buf, sizeof(buf));
+      if (!WriteAll(task.fd, str, sizeof(str))) {
+        CloseClient(&task);
+        AddFailCnt();
+        break;
       }
-      if (ret > 0 || (-1 == ret && EAGAIN == errno)) {
-        if (ret > 0)
+
+      for (;;) {
+        ret = read(task.fd, buf, sizeof(buf));
+        if (ret > 0) {
           AddSuccCnt();
-        continue;
+          break;
+        }
+        if (-1 == ret && EAGAIN == errno) {
+          co_yield_ct();
+          continue;
+        }
+        CloseClient(&task);
+        AddFailCnt();
+        break;
       }
-      close(fd);
-      fd = -1;
-      AddFailCnt();
-      break;
+      if (task.fd < 0) {
+        break;
+      }
     }
   }
   return 0;
