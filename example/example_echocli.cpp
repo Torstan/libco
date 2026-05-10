@@ -135,16 +135,14 @@ void inline AddFailCnt() { iFailCnt.fetch_add(1, std::memory_order_relaxed); }
 
 void PrintStat() {
   size_t now = GetTickUS();
-  size_t time_old = iTime.load(std::memory_order_relaxed);
+  size_t time_old = iTime.exchange(now, std::memory_order_relaxed);
   size_t time_delta = now - time_old;
-  size_t succ_cnt = iSuccCnt.load(std::memory_order_relaxed);
-  if (now > time_old) {
-    printf("time %lu qps %ld Succ Cnt %ld Fail Cnt %ld\n", time_old,
-           succ_cnt * 1000000 / time_delta, succ_cnt,
-           iFailCnt.load(std::memory_order_relaxed));
-    iTime.store(now, std::memory_order_relaxed);
-    iSuccCnt.store(0, std::memory_order_relaxed);
-    iFailCnt.store(0, std::memory_order_relaxed);
+  size_t succ_cnt = iSuccCnt.exchange(0, std::memory_order_relaxed);
+  size_t fail_cnt = iFailCnt.exchange(0, std::memory_order_relaxed);
+  if (now > time_old && time_old != 0) {
+    printf("time delta %.2lf qps %ld Succ Cnt %ld Fail Cnt %ld\n",
+           time_delta / 1000000.0,
+           succ_cnt * 1000000 / time_delta, succ_cnt, fail_cnt);
   }
 }
 
@@ -153,8 +151,10 @@ static void *readwrite_routine(const stEndPoint& ep) {
   co_enable_hook_sys();
 
   const stEndPoint *endpoint = &ep;
-  char str[8] = "sarlmol";
-  char buf[1024 * 16];
+  constexpr size_t kSendBufSize = 8;
+  size_t total_recv_size = 0;
+  char str[kSendBufSize] = "sarlmol";
+  char buf[kSendBufSize * 2];
   client_task_t task = {};
   task.co = co_self();
   task.fd = -1;
@@ -223,7 +223,11 @@ static void *readwrite_routine(const stEndPoint& ep) {
       for (;;) {
         ret = read(task.fd, buf, sizeof(buf));
         if (ret > 0) {
-          AddSuccCnt();
+          total_recv_size += ret;
+          if (total_recv_size >= kSendBufSize) {
+            total_recv_size -= kSendBufSize;
+            AddSuccCnt();
+          }
           break;
         }
         if (-1 == ret && EAGAIN == errno) {
