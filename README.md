@@ -34,6 +34,13 @@ cmake -S . -B build
 cmake --build build
 ```
 
+### macOS
+
+Native Apple Silicon macOS builds are supported for the basic library,
+examples, and tests. On arm64 Darwin, the build uses the existing `ucontext`
+backend instead of the x86 assembly context switch, and the event loop uses the
+existing kqueue-backed epoll compatibility layer.
+
 ## Test
 
 Using Make:
@@ -49,6 +56,9 @@ cmake -S . -B build
 cmake --build build
 cd build && ctest --output-on-failure
 ```
+
+On macOS, the supported test target is the basic suite above. The `risk-check`
+and `risk-diagnose` targets remain Linux-oriented diagnostics in this phase.
 
 ## Examples
 
