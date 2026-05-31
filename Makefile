@@ -25,7 +25,7 @@ include co.mk
 
 ########## options ##########
 CFLAGS += -g -fno-strict-aliasing -O2 --std=c++17 -Wall -Werror \
-	-pipe -D_REENTRANT -fPIC -Wno-deprecated
+	-pipe -D_REENTRANT -fPIC
 
 LINKS += -g -L./lib -lcolib $(PLATFORM_LIBS)
 

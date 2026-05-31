@@ -21,11 +21,12 @@ COMM_MAKE = 1
 COMM_ECHO = 1
 version=0.5
 v=debug
+SRCROOT=..
 include ../co.mk
 
 ########## options ##########
 CFLAGS += -I../ -g -fno-strict-aliasing -O2 --std=c++17 -Wall -Werror \
-	-pipe -D_REENTRANT -fPIC -Wno-deprecated
+	-pipe -D_REENTRANT -fPIC
 
 LINKS += -g -L../lib -lcolib $(PLATFORM_LIBS)
 

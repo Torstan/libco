@@ -17,8 +17,8 @@
 #
 
 ##### Makefile Rules ##########
-MAIL_ROOT=.
-SRCROOT=.
+MAIL_ROOT ?= .
+SRCROOT ?= .
 
 UNAME_S := $(shell uname -s)
 UNAME_M := $(shell uname -m)
@@ -52,7 +52,7 @@ CPPSHARE = $(CPP) -fPIC --std=c++17 $(PLATFORM_SHARED_FLAG) -O2 -Wall -Werror -p
 CSHARE = $(CC) -fPIC --std=c++17 $(PLATFORM_SHARED_FLAG) -O2 -Wall -Werror -pipe $(PLATFORM_CFLAGS) -L$(SRCROOT)/solib/ -o
 
 ifeq ($v,release)
-CFLAGS= $(INCLS) -fPIC --std=c++17 -O2 -Wall -Werror $(PLATFORM_CFLAGS) -pipe -Wno-deprecated -c
+CFLAGS= $(INCLS) -fPIC --std=c++17 -O2 -Wall -Werror $(PLATFORM_CFLAGS) -pipe -c
 else
 CFLAGS= -g $(INCLS) -fPIC --std=c++17 -O0 -Wall -Werror $(PLATFORM_CFLAGS) -pipe -c -fno-inline
 endif
@@ -81,7 +81,7 @@ COBJS  = $(patsubst %.c,%.o,$(CSRCS))
 SRCS = $(CPPSRCS) $(CSRCS)
 OBJS = $(CPPOBJS) $(COBJS)
 
-CPPCOMPI=$(CPP) $(CFLAGS) -Wno-deprecated
+CPPCOMPI=$(CPP) $(CFLAGS)
 CCCOMPI=$(CC) $(CFLAGS)
 
 BUILDEXE = $(CPP) $(BFLAGS) $(PLATFORM_LDFLAGS) -o $@ $^ $(LINKS)
