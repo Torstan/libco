@@ -177,9 +177,10 @@ static int co_epoll_wait(int epfd, struct co_epoll_res *events, int maxevents,
       return -1;
     }
 
-    struct epoll_event *ev = events->events + i;
+    struct epoll_event *ev = nullptr;
     if (0 == ptr->fire_idx) {
-      ptr->fire_idx = i + 1;
+      ev = events->events + j;
+      ptr->fire_idx = j + 1;
       memset(ev, 0, sizeof(*ev));
       ++j;
     } else {

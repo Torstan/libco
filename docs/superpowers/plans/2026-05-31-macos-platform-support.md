@@ -376,16 +376,16 @@ Replace the complete contents of `co.mk` with:
 #
 # Copyright (C) 2014 THL A29 Limited, a Tencent company. All rights reserved.
 #
-# Licensed under the Apache License, Version 2.0 (the "License"); 
-# you may not use this file except in compliance with the License. 
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
 #	http://www.apache.org/licenses/LICENSE-2.0
 #
-# Unless required by applicable law or agreed to in writing, 
-# software distributed under the License is distributed on an "AS IS" BASIS, 
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. 
-# See the License for the specific language governing permissions and 
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
 # limitations under the License.
 #
 
@@ -421,8 +421,8 @@ CPP = $(CXX)
 AR = ar -rc
 RANLIB = ranlib
 
-CPPSHARE = $(CPP) -fPIC --std=c++17 $(PLATFORM_SHARED_FLAG) -O2 -Wall -Werror -pipe $(PLATFORM_CFLAGS) -L$(SRCROOT)/solib/ -o 
-CSHARE = $(CC) -fPIC --std=c++17 $(PLATFORM_SHARED_FLAG) -O2 -Wall -Werror -pipe $(PLATFORM_CFLAGS) -L$(SRCROOT)/solib/ -o 
+CPPSHARE = $(CPP) -fPIC --std=c++17 $(PLATFORM_SHARED_FLAG) -O2 -Wall -Werror -pipe $(PLATFORM_CFLAGS) -L$(SRCROOT)/solib/ -o
+CSHARE = $(CC) -fPIC --std=c++17 $(PLATFORM_SHARED_FLAG) -O2 -Wall -Werror -pipe $(PLATFORM_CFLAGS) -L$(SRCROOT)/solib/ -o
 
 ifeq ($v,release)
 CFLAGS= $(INCLS) -fPIC --std=c++17 -O2 -Wall -Werror $(PLATFORM_CFLAGS) -pipe -Wno-deprecated -c
@@ -457,8 +457,8 @@ OBJS = $(CPPOBJS) $(COBJS)
 CPPCOMPI=$(CPP) $(CFLAGS) -Wno-deprecated
 CCCOMPI=$(CC) $(CFLAGS)
 
-BUILDEXE = $(CPP) $(BFLAGS) $(PLATFORM_LDFLAGS) -o $@ $^ $(LINKS) 
-CLEAN = rm -f *.o 
+BUILDEXE = $(CPP) $(BFLAGS) $(PLATFORM_LDFLAGS) -o $@ $^ $(LINKS)
+CLEAN = rm -f *.o
 
 CPPCOMPILE = $(CPPCOMPI) $< $(FLAGS) $(INCLS) $(MTOOL_INCL) -o $@
 CCCOMPILE = $(CCCOMPI) $< $(FLAGS) $(INCLS) $(MTOOL_INCL) -o $@
