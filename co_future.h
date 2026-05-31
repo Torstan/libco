@@ -253,7 +253,7 @@ private:
 
     template<typename U>
     friend class Future;
-    friend class FutureState<T>;
+    friend struct FutureState<T>;
 };
 
 template <typename... T> struct is_future : std::false_type {};

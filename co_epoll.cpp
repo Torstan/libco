@@ -149,19 +149,34 @@ struct kevent_pair_t {
   uint64_t u64;
 };
 static int co_epoll_create(int size) { return kqueue(); }
+static struct timespec milliseconds_to_timespec(int timeout_ms) {
+  struct timespec t = {0};
+  if (timeout_ms > 0) {
+    t.tv_sec = timeout_ms / 1000;
+    t.tv_nsec = (timeout_ms % 1000) * 1000000;
+  }
+  return t;
+}
+
 static int co_epoll_wait(int epfd, struct co_epoll_res *events, int maxevents,
                          int timeout) {
-  struct timespec t = {0};
-  if (timeout > 0) {
-    t.tv_sec = timeout;
-  }
-  int ret = kevent(epfd, nullptr, 0,             // register null
+  struct timespec t = milliseconds_to_timespec(timeout);
+  int ret = kevent(epfd, nullptr, 0,              // register null
                    events->eventlist, maxevents, // just retrival
                    (-1 == timeout) ? nullptr : &t);
+  if (ret <= 0) {
+    return ret;
+  }
+
   int j = 0;
   for (int i = 0; i < ret; i++) {
     struct kevent &kev = events->eventlist[i];
     struct kevent_pair_t *ptr = (struct kevent_pair_t *)kev.udata;
+    if (!ptr) {
+      errno = EINVAL;
+      return -1;
+    }
+
     struct epoll_event *ev = events->events + i;
     if (0 == ptr->fire_idx) {
       ptr->fire_idx = i + 1;
@@ -213,6 +228,7 @@ static int co_epoll_ctl(int epfd, int op, int fd, struct epoll_event *ev) {
 
   const int flags = (EPOLLIN | EPOLLOUT | EPOLLERR | EPOLLHUP);
   if (ev->events & ~flags) {
+    errno = EINVAL;
     return -1;
   }
 

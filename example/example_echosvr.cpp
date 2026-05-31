@@ -291,7 +291,7 @@ static int CreateTcpSocket(const unsigned short shPort /* = 0 */,
       }
       struct sockaddr_in addr;
       SetAddr(pszIP, shPort, addr);
-      int ret = bind(fd, (struct sockaddr *)&addr, sizeof(addr));
+      int ret = ::bind(fd, (struct sockaddr *)&addr, sizeof(addr));
       if (ret != 0) {
         close(fd);
         return -1;

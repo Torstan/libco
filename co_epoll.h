@@ -62,7 +62,7 @@ struct epoll_event {
 namespace co {
 
 // Forward declarations
-struct Timeout;
+class Timeout;
 struct TimeoutItemLink;
 
 // Event result buffer (internal)

@@ -24,6 +24,7 @@ available.
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <vector>
 
 using namespace co;
 
@@ -35,9 +36,9 @@ static void *routine_func(void *) {
 int main(int argc, char *argv[]) {
   int cnt = atoi(argv[1]);
 
-  pthread_t tid[cnt];
+  std::vector<pthread_t> tid(cnt);
   for (int i = 0; i < cnt; i++) {
-    pthread_create(tid + i, nullptr, routine_func, 0);
+    pthread_create(&tid[i], nullptr, routine_func, 0);
   }
   for (;;) {
     sleep(1);

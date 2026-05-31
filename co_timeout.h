@@ -1,8 +1,8 @@
 #pragma once
 
+#include "co_epoll.h"
 #include "co_link.h"
 #include "util.h"
-#include <sys/epoll.h>
 
 namespace co {
 

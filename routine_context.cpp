@@ -1,6 +1,7 @@
 #include "routine_context.h"
 #include "thread_worker.h"
 #include <assert.h>
+#include <stdint.h>
 
 namespace co {
 
@@ -29,11 +30,26 @@ void RoutineContext::InitCtx(char* stack_buf, size_t stack_size) {
 
 void RoutineContext::MakeCtx(coctx_func_t func, void *arg1) {
 #ifdef USE_UCONTEXT
-  makecontext(&uctx, (ucontext_func_t)func, 2, arg1, nullptr);
+  func_ = func;
+  arg_ = arg1;
+  uintptr_t self = reinterpret_cast<uintptr_t>(this);
+  uint32_t low = static_cast<uint32_t>(self);
+  uint32_t high = static_cast<uint32_t>(self >> 32);
+  makecontext(&uctx, (ucontext_func_t)&RoutineContext::Entry, 2, low, high);
 #else
   coctx_make(&ctx, func, arg1, nullptr);
 #endif
 }
+
+#ifdef USE_UCONTEXT
+void RoutineContext::Entry(uint32_t low, uint32_t high) {
+  uintptr_t self = (static_cast<uintptr_t>(high) << 32) | low;
+  RoutineContext *ctx = reinterpret_cast<RoutineContext *>(self);
+  assert(ctx);
+  assert(ctx->func_);
+  ctx->func_(ctx->arg_, nullptr);
+}
+#endif
 
 void RoutineContext::switch_in() {
   assert(!prev_link);

@@ -18,7 +18,7 @@ void add_urgent_task(std::unique_ptr<Task>&& t) {
     pending_tasks.push_front(std::move(t));
 }
 
-ThreadWorker::ThreadWorker(int idx) : thread_idx(idx) {}
+ThreadWorker::ThreadWorker(int) {}
 
 void ThreadWorker::switch_in(RoutineContext* ctx) {
     ctx->switch_in();

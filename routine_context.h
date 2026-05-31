@@ -1,6 +1,10 @@
 #pragma once
 #include "coctx.h"
+
+#ifdef USE_UCONTEXT
+#include <stdint.h>
 #include <ucontext.h>
+#endif
 
 namespace co {
 
@@ -15,6 +19,9 @@ public:
 
 private:
 #ifdef USE_UCONTEXT
+  static void Entry(uint32_t low, uint32_t high);
+  coctx_func_t func_{nullptr};
+  void *arg_{nullptr};
   ucontext_t uctx;
 #else
   coctx_t ctx;
