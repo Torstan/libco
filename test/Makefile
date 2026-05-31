@@ -24,16 +24,10 @@ v=debug
 include ../co.mk
 
 ########## options ##########
-CFLAGS += -I../ -g -fno-strict-aliasing -O2 --std=c++17 -Wall -Werror -export-dynamic \
-	-pipe -D_GNU_SOURCE -D_REENTRANT -fPIC -Wno-deprecated -m64
+CFLAGS += -I../ -g -fno-strict-aliasing -O2 --std=c++17 -Wall -Werror \
+	-pipe -D_REENTRANT -fPIC -Wno-deprecated
 
-UNAME := $(shell uname -s)
-
-ifeq ($(UNAME), FreeBSD)
-LINKS += -g -L../lib -lcolib -lpthread
-else
-LINKS += -g -L../lib -lcolib -lpthread -ldl
-endif
+LINKS += -g -L../lib -lcolib $(PLATFORM_LIBS)
 
 PROGS = test_co_routine test_co_async test_co_poll test_public_api
 

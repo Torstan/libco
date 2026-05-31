@@ -24,18 +24,16 @@ v=debug
 include co.mk
 
 ########## options ##########
-CFLAGS += -g -fno-strict-aliasing -O2 --std=c++17 -Wall -Werror -export-dynamic \
-	-pipe -D_GNU_SOURCE -D_REENTRANT -fPIC -Wno-deprecated -m64
+CFLAGS += -g -fno-strict-aliasing -O2 --std=c++17 -Wall -Werror \
+	-pipe -D_REENTRANT -fPIC -Wno-deprecated
 
-UNAME := $(shell uname -s)
+LINKS += -g -L./lib -lcolib $(PLATFORM_LIBS)
 
-ifeq ($(UNAME), FreeBSD)
-LINKS += -g -L./lib -lcolib -lpthread
-else
-LINKS += -g -L./lib -lcolib -lpthread -ldl
+COLIB_OBJS=co_epoll.o co_cond.o thread_worker.o routine_context.o co_routine.o co_hook_sys_call.o
+
+ifeq ($(USE_UCONTEXT),0)
+COLIB_OBJS += coctx_swap.o coctx.o
 endif
-
-COLIB_OBJS=co_epoll.o co_cond.o thread_worker.o routine_context.o co_routine.o co_hook_sys_call.o coctx_swap.o coctx.o
 
 all: colib examples tests
 

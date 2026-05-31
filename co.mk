@@ -16,24 +16,45 @@
 # limitations under the License.
 #
 
-
-
 ##### Makefile Rules ##########
 MAIL_ROOT=.
 SRCROOT=.
+
+UNAME_S := $(shell uname -s)
+UNAME_M := $(shell uname -m)
+
+USE_UCONTEXT ?= 0
+PLATFORM_CFLAGS :=
+PLATFORM_LDFLAGS :=
+PLATFORM_LIBS := -lpthread
+PLATFORM_SHARED_FLAG := -shared
+
+ifeq ($(UNAME_S),Darwin)
+  PLATFORM_SHARED_FLAG := -dynamiclib
+  ifeq ($(UNAME_M),arm64)
+    USE_UCONTEXT := 1
+    PLATFORM_CFLAGS += -D_XOPEN_SOURCE -DUSE_UCONTEXT -Wno-deprecated-declarations
+  endif
+else
+  PLATFORM_CFLAGS += -D_GNU_SOURCE -DLINUX -m64
+  PLATFORM_LDFLAGS += -export-dynamic
+  ifneq ($(UNAME_S),FreeBSD)
+    PLATFORM_LIBS += -ldl
+  endif
+endif
 
 ##define the compliers
 CPP = $(CXX)
 AR = ar -rc
 RANLIB = ranlib
 
-CPPSHARE = $(CPP) -fPIC --std=c++17 -shared -O2 -Wall -Werror -pipe -L$(SRCROOT)/solib/ -o 
-CSHARE = $(CC) -fPIC --std=c++17 -shared -O2 -Wall -Werror -pipe -L$(SRCROOT)/solib/ -o 
+CPPSHARE = $(CPP) -fPIC --std=c++17 $(PLATFORM_SHARED_FLAG) -O2 -Wall -Werror -pipe $(PLATFORM_CFLAGS) -L$(SRCROOT)/solib/ -o
+CSHARE = $(CC) -fPIC --std=c++17 $(PLATFORM_SHARED_FLAG) -O2 -Wall -Werror -pipe $(PLATFORM_CFLAGS) -L$(SRCROOT)/solib/ -o
 
 ifeq ($v,release)
-CFLAGS= $(INCLS) -fPIC --std=c++17 -O2 -Wall -Werror -DLINUX -pipe -Wno-deprecated -c
+CFLAGS= $(INCLS) -fPIC --std=c++17 -O2 -Wall -Werror $(PLATFORM_CFLAGS) -pipe -Wno-deprecated -c
 else
-CFLAGS= -g $(INCLS) -fPIC --std=c++17 -O0 -Wall -Werror -DLINUX -pipe -c -fno-inline
+CFLAGS= -g $(INCLS) -fPIC --std=c++17 -O0 -Wall -Werror $(PLATFORM_CFLAGS) -pipe -c -fno-inline
 endif
 
 ifneq ($v,release)
@@ -63,7 +84,7 @@ OBJS = $(CPPOBJS) $(COBJS)
 CPPCOMPI=$(CPP) $(CFLAGS) -Wno-deprecated
 CCCOMPI=$(CC) $(CFLAGS)
 
-BUILDEXE = $(CPP) $(BFLAGS) -o $@ $^ $(LINKS) 
+BUILDEXE = $(CPP) $(BFLAGS) $(PLATFORM_LDFLAGS) -o $@ $^ $(LINKS)
 CLEAN = rm -f *.o 
 
 CPPCOMPILE = $(CPPCOMPI) $< $(FLAGS) $(INCLS) $(MTOOL_INCL) -o $@
