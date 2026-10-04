@@ -19,9 +19,9 @@ available.
 
 #pragma once
 
-#include "co_stack.h"
-#include "routine_context.h"
-#include "util.h"
+#include "internal/stack.h"
+#include "internal/context.h"
+#include "internal/util.h"
 #include <stdint.h>
 #include <sys/poll.h>
 #include <sys/socket.h>

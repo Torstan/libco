@@ -2,19 +2,26 @@ ROOT := ../..
 BUILD_DIR ?= build
 CXX ?= g++
 
+SRCROOT := $(ROOT)
+include $(ROOT)/co.mk
+
 LIBCO_SRCS := \
-	$(ROOT)/co_epoll.cpp \
+	$(ROOT)/internal/io_backend.cpp \
 	$(ROOT)/co_cond.cpp \
 	$(ROOT)/thread_worker.cpp \
-	$(ROOT)/routine_context.cpp \
+	$(ROOT)/internal/context.cpp \
 	$(ROOT)/co_routine.cpp \
-	$(ROOT)/co_hook_sys_call.cpp \
-	$(ROOT)/coctx.cpp \
-	$(ROOT)/coctx_swap.S
+	$(ROOT)/co_hook_sys_call.cpp
+
+ifeq ($(USE_UCONTEXT),0)
+LIBCO_SRCS += \
+	$(ROOT)/internal/coctx.cpp \
+	$(ROOT)/internal/coctx_swap.S
+endif
 
 COMMON_FLAGS := -I$(ROOT) -I. -g -fno-strict-aliasing -O1 --std=c++17 \
-	-Wall -Werror -pipe -D_GNU_SOURCE -D_REENTRANT -fPIC -Wno-deprecated -m64
-COMMON_LIBS := -lpthread -ldl
+	-Wall -Werror -pipe -D_REENTRANT -fPIC -Wno-deprecated $(PLATFORM_CFLAGS)
+COMMON_LIBS := $(PLATFORM_LIBS)
 
 RISK_CHECK_PROGS := test_poll_semantics test_hook_syscall_semantics test_lifecycle_boundaries
 RISK_DIAGNOSE_PROGS := diag_hook_fd_race diag_leaks_and_boundaries diag_perf_boundaries
@@ -28,7 +35,7 @@ $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
 define RISK_PROGRAM_template
-$(BUILD_DIR)/$(1): $(1).cpp risk_common.h $(LIBCO_SRCS) | $(BUILD_DIR)
+$(BUILD_DIR)/$(1): $(1).cpp risk_common.h $(LIBCO_SRCS) Makefile $(ROOT)/co.mk | $(BUILD_DIR)
 	$(CXX) $(COMMON_FLAGS) $(SAN_FLAGS) -o $$@ $(1).cpp $(LIBCO_SRCS) $(COMMON_LIBS) $(SAN_FLAGS)
 endef
 

@@ -29,10 +29,10 @@ CFLAGS += -g -fno-strict-aliasing -O2 --std=c++17 -Wall -Werror \
 
 LINKS += -g -L./lib -lcolib $(PLATFORM_LIBS)
 
-COLIB_OBJS=co_epoll.o co_cond.o thread_worker.o routine_context.o co_routine.o co_hook_sys_call.o
+COLIB_OBJS=internal/io_backend.o co_cond.o thread_worker.o internal/context.o co_routine.o co_hook_sys_call.o
 
 ifeq ($(USE_UCONTEXT),0)
-COLIB_OBJS += coctx_swap.o coctx.o
+COLIB_OBJS += internal/coctx_swap.o internal/coctx.o
 endif
 
 all: colib examples tests
@@ -69,7 +69,7 @@ libco-$(version).src.tar.gz:
 	@(cd ..; rm libco-$(version))
 
 clean:
-	$(CLEAN) *.o
+	$(CLEAN) *.o internal/*.o
 	rm -fr MANIFEST lib solib libco-$(version).src.tar.gz libco-$(version)
 	$(MAKE) -C example clean
 	$(MAKE) -C test clean

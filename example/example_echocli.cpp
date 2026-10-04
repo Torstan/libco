@@ -17,9 +17,9 @@ available.
 * limitations under the License.
 */
 
-#include "co_epoll.h"
+#include "internal/io_backend.h"
 #include "co_routine.h"
-#include "co_timeout.h"
+#include "internal/event.h"
 #include "thread_worker.h"
 
 #include <errno.h>

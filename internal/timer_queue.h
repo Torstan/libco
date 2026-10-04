@@ -1,29 +1,9 @@
 #pragma once
 
-#include "co_epoll.h"
-#include "co_link.h"
+#include "event.h"
 #include "util.h"
 
 namespace co {
-
-struct TimeoutItem;
-struct TimeoutItemLink;
-
-typedef void (*prepare_func_t)(TimeoutItem *, struct epoll_event &ev,
-                               TimeoutItemLink *active);
-typedef void (*process_func_t)(TimeoutItem *);
-
-struct TimeoutItem : public LinkItemBase<TimeoutItem> {
-  unsigned long long expire_time_ms;
-
-  prepare_func_t prepare_func;
-  process_func_t process_func;
-
-  void *arg; // routine
-  bool timeout;
-};
-
-struct TimeoutItemLink : LinkedList<TimeoutItem> {};
 
 class Timeout {
   static constexpr int item_size = 60 * 1000;

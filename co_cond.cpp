@@ -1,6 +1,8 @@
 #include "co_cond.h"
-#include "co_epoll.h"
-#include "co_link.h"
+#include "internal/io_backend.h"
+#include "internal/timer_queue.h"
+#include "internal/util.h"
+#include "internal/co_link.h"
 #include "co_routine.h"
 #include <stdlib.h>
 

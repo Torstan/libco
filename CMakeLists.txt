@@ -42,17 +42,17 @@ else()
 endif()
 
 set(LIBCO_SOURCE_FILES
-        co_epoll.cpp
+        internal/io_backend.cpp
         co_cond.cpp
         thread_worker.cpp
-        routine_context.cpp
+        internal/context.cpp
         co_routine.cpp
         co_hook_sys_call.cpp)
 
 if(NOT LIBCO_USE_UCONTEXT)
     list(APPEND LIBCO_SOURCE_FILES
-            coctx.cpp
-            coctx_swap.S)
+            internal/coctx.cpp
+            internal/coctx_swap.S)
 endif()
 
 add_library(colib_static STATIC ${LIBCO_SOURCE_FILES})

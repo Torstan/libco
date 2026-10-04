@@ -1,6 +1,6 @@
 #pragma once
-#include "co_link.h"
-#include "co_timeout.h"
+#include "internal/co_link.h"
+#include "internal/event.h"
 
 namespace co {
 
