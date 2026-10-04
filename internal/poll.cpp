@@ -31,8 +31,6 @@ struct PollItem : public detail::IoSource {
   IoEvent io_event;
 };
 
-typedef int (*poll_func_t)(struct pollfd fds[], nfds_t nfds, int timeout);
-
 static int SystemPoll(struct pollfd fds[], nfds_t nfds, int timeout) {
   return ::poll(fds, nfds, timeout);
 }
@@ -185,7 +183,7 @@ static void CleanupPoll(EpollCtx *ep_ctx, struct pollfd fds[], PollBase *poll) {
     PollItem &item = poll->poll_items[i];
     int fd = item.registered_fd;
     if (fd > -1) {
-      ep_ctx->del(fd, &item.io_event);
+      ep_ctx->del(fd);
       if (item.owns_registered_fd) {
         close(fd);
       }
@@ -197,7 +195,7 @@ static void CleanupPoll(EpollCtx *ep_ctx, struct pollfd fds[], PollBase *poll) {
 }
 
 static int co_poll_inner(struct pollfd fds[], nfds_t nfds, int timeout,
-                  poll_func_t poll_func) {
+                  detail::PollFunc poll_func) {
   // Preserve native readiness/error semantics before using the async backend.
   int ready = poll_func ? poll_func(fds, nfds, 0) : SystemPoll(fds, nfds, 0);
   if (ready != 0 || timeout == 0) {

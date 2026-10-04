@@ -236,7 +236,6 @@ class Future {
     Promise<T>* _promise;
     detail::WaitRecord* _waiter = nullptr;
     FutureState<T> _local_state; //valid if !_promise
-    static constexpr bool copy_noexcept = FutureState<T>::copy_noexcept;
 private:
     Future(Promise<T>* promise) noexcept : _promise(promise) {
         _promise->_future = this;
@@ -248,9 +247,6 @@ private:
     template <typename... A>
     Future(exception_future_marker, std::exception_ptr ex) noexcept : _promise(nullptr) {
         _local_state.set_exception(std::move(ex));
-    }
-    explicit Future(FutureState<T>&& state) noexcept
-        : _promise(nullptr), _local_state(std::move(state)) {
     }
     FutureState<T>* state() noexcept {
         return _promise ? _promise->_state : &_local_state;

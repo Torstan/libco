@@ -51,7 +51,6 @@ using namespace co;
 
 struct rpchook_t {
   int user_flag;
-  int domain;              // AF_LOCAL , AF_INET
 
   struct timeval read_timeout;
   struct timeval write_timeout;
@@ -89,7 +88,6 @@ typedef int (*fcntl_pfn_t)(int fildes, int cmd, ...);
 typedef int (*setenv_pfn_t)(const char *name, const char *value, int overwrite);
 typedef int (*unsetenv_pfn_t)(const char *name);
 typedef char *(*getenv_pfn_t)(const char *name);
-typedef int (*__poll_pfn_t)(struct pollfd fds[], nfds_t nfds, int timeout);
 
 static socket_pfn_t g_sys_socket_func =
     (socket_pfn_t)dlsym(RTLD_NEXT, "socket");
@@ -120,8 +118,6 @@ static unsetenv_pfn_t g_sys_unsetenv_func =
     (unsetenv_pfn_t)dlsym(RTLD_NEXT, "unsetenv");
 static getenv_pfn_t g_sys_getenv_func =
     (getenv_pfn_t)dlsym(RTLD_NEXT, "getenv");
-static __poll_pfn_t g_sys___poll_func =
-    (__poll_pfn_t)dlsym(RTLD_NEXT, "__poll");
 
 static constexpr int kMaxHookFdCount =
     sizeof(g_rpchook_socket_fd) / sizeof(g_rpchook_socket_fd[0]);
@@ -217,7 +213,6 @@ int socket(int domain, int type, int protocol) {
   }
 
   rpchook_t state{};
-  state.domain = domain;
   state.read_timeout.tv_sec = state.write_timeout.tv_sec = 1;
   if (!alloc_by_fd(fd, state)) {
     g_sys_close_func(fd);
@@ -240,7 +235,6 @@ int co_accept(int fd, struct sockaddr *addr, socklen_t *len) {
   state.read_timeout.tv_sec = state.write_timeout.tv_sec = 1;
   rpchook_t parent{};
   if (snapshot_by_fd(fd, &parent)) {
-    state.domain = parent.domain;
     state.read_timeout = parent.read_timeout;
     state.write_timeout = parent.write_timeout;
   }

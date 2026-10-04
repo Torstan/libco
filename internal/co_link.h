@@ -28,7 +28,6 @@ public:
   T *tail = nullptr;
 
   bool empty() const { return head == nullptr; }
-  void clear() { head = tail = nullptr; }
 
   // Add node to the tail. No-op if node is already in a list.
   void add_tail(T *node) {

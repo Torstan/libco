@@ -46,7 +46,6 @@ enum EPOLL_EVENTS {
 
 #define EPOLL_CTL_ADD 1
 #define EPOLL_CTL_DEL 2
-#define EPOLL_CTL_MOD 3
 
 typedef union epoll_data {
   void *ptr;
@@ -259,27 +258,17 @@ static int co_epoll_ctl(int epfd, int op, int fd, struct epoll_event *ev,
     if (co_epoll_del(epfd, fd, fd_map) < 0) return -1;
     ptr = nullptr;
   }
-  if (EPOLL_CTL_ADD == op && ptr) {
+  if (ptr) {
     errno = EEXIST;
     return -1;
-  } else if (EPOLL_CTL_MOD == op && !ptr) {
-    errno = ENOENT;
-    return -1;
   }
 
-  if (!ptr) {
-    ptr = (kevent_pair_t *)calloc(1, sizeof(kevent_pair_t));
-    fd_map->set(fd, ptr);
-  }
+  ptr = (kevent_pair_t *)calloc(1, sizeof(kevent_pair_t));
+  fd_map->set(fd, ptr);
 
-  int old_events = ptr->events;
   if (set_filters(epfd, fd, ptr, ev->events) < 0) {
     int error = errno;
-    if (op == EPOLL_CTL_MOD) {
-      ptr->active = set_filters(epfd, fd, ptr, old_events) == 0;
-    } else {
-      co_epoll_del(epfd, fd, fd_map);
-    }
+    co_epoll_del(epfd, fd, fd_map);
     errno = error;
     return -1;
   }
@@ -389,13 +378,7 @@ int EpollCtx::add(int fd, const IoEvent *event) {
   native.data.ptr = event->data;
   return co_epoll_ctl(impl_->fd, EPOLL_CTL_ADD, fd, &native, &impl_->registrations);
 }
-int EpollCtx::del(int fd, const IoEvent *) {
+int EpollCtx::del(int fd) {
   return co_epoll_ctl(impl_->fd, EPOLL_CTL_DEL, fd, nullptr, &impl_->registrations);
-}
-int EpollCtx::mod(int fd, const IoEvent *event) {
-  epoll_event native{};
-  native.events = NativeEvents(event->events);
-  native.data.ptr = event->data;
-  return co_epoll_ctl(impl_->fd, EPOLL_CTL_MOD, fd, &native, &impl_->registrations);
 }
 } // namespace co

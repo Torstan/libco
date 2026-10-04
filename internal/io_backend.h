@@ -34,8 +34,7 @@ public:
   ~EpollCtx();
   int wait(int timeout_ms = 1);
   int add(int fd, const IoEvent *event);
-  int del(int fd, const IoEvent *event);
-  int mod(int fd, const IoEvent *event);
+  int del(int fd);
   IoEvent event(int index) const;
   int fd() const;
 private:

@@ -5,8 +5,6 @@ namespace co {
 class Coroutine;
 class ThreadEnv;
 namespace detail {
-Coroutine& RequireWaiter();
-
 // One thread-local suspension. Sources remain alive until Detach runs; completion
 // only queues the waiter, so a whole batch of I/O results can be collected first.
 class WaitRecord : private LinkItemBase<WaitRecord> {

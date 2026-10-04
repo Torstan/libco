@@ -160,14 +160,6 @@ Coroutine *Coroutine::Self() {
   return env ? env->impl_->current_ : nullptr;
 }
 
-Coroutine& detail::RequireWaiter() {
-  Coroutine* co = Coroutine::Self();
-  if (!co || co->impl_->is_main_) {
-    throw std::logic_error("cannot wait on a not-ready Future without a coroutine context");
-  }
-  return *co;
-}
-
 void Coroutine::Yield() { impl_->owner_->Yield(*this); }
 void Coroutine::Resume() { impl_->owner_->Resume(*this); }
 
@@ -299,7 +291,10 @@ void ThreadEnv::RunReady() {
 }
 
 namespace detail {
-WaitRecord::WaitRecord() : coroutine_(&RequireWaiter()), owner_(ThreadEnv::Current()) {
+WaitRecord::WaitRecord() : coroutine_(Coroutine::Self()), owner_(ThreadEnv::Current()) {
+  if (!coroutine_ || coroutine_->impl_->is_main_) {
+    throw std::logic_error("cannot wait on a not-ready Future without a coroutine context");
+  }
   if (coroutine_->impl_->waiting_) throw std::logic_error("coroutine already waiting");
   coroutine_->impl_->waiting_ = this;
 }

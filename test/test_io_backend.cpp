@@ -58,28 +58,9 @@ static void failed_add(bool fail_cleanup) {
   require(backend.add(fds[0], &event) == 0, "retry add after failure");
   require(backend.wait(0) == 1 && backend.event(0).data == &marker,
           "retry must deliver the new registration");
-  require(backend.del(fds[0], &event) == 0, "delete");
+  require(backend.del(fds[0]) == 0, "delete");
   require(kevent(backend.fd(), nullptr, 0, &pending, 1, &zero) == 0,
           "retry must leave no stale kernel filters");
-  close(fds[0]);
-  close(fds[1]);
-}
-
-static void failed_mod() {
-  int fds[2];
-  require(socketpair(AF_UNIX, SOCK_STREAM, 0, fds) == 0, "socketpair");
-  co::EpollCtx backend;
-  int before = 1, after = 2;
-  co::IoEvent event{POLLIN, &before};
-  require(backend.add(fds[0], &event) == 0, "add");
-  event = {POLLOUT, &after};
-  fail_write_adds = 1;
-  require(backend.mod(fds[0], &event) == -1 && errno == ENOMEM, "modify");
-  require(write(fds[1], "x", 1) == 1, "write");
-  require(backend.wait(0) == 1, "failed mod must restore old filter");
-  require(backend.event(0).data == &before &&
-          backend.event(0).events == POLLIN, "failed mod must preserve old data");
-  require(backend.del(fds[0], &event) == 0, "delete");
   close(fds[0]);
   close(fds[1]);
 }
@@ -93,7 +74,7 @@ static void failed_delete(int error) {
   require(backend.add(fds[0], &event) == 0, "add");
   fail_deletes = 1;
   delete_error = error;
-  int result = backend.del(fds[0], &event);
+  int result = backend.del(fds[0]);
   if (error == EINTR) {
     require(result == 0, "interrupted delete must retry");
   } else {
@@ -101,7 +82,7 @@ static void failed_delete(int error) {
   }
   require(write(fds[1], "x", 1) == 1, "write");
   require(backend.wait(0) == 0, "failed delete must not dispatch old data");
-  require(backend.del(fds[0], &event) == 0, "retry delete");
+  require(backend.del(fds[0]) == 0, "retry delete");
   struct kevent pending{};
   struct timespec zero{};
   require(kevent(backend.fd(), nullptr, 0, &pending, 1, &zero) == 0,
@@ -110,7 +91,7 @@ static void failed_delete(int error) {
   close(fds[1]);
 }
 
-static void mod_closed_fd() {
+static void delete_closed_fd() {
   int fds[2];
   require(socketpair(AF_UNIX, SOCK_STREAM, 0, fds) == 0, "socketpair");
   co::EpollCtx backend;
@@ -118,9 +99,7 @@ static void mod_closed_fd() {
   co::IoEvent event{POLLIN, &marker};
   require(backend.add(fds[0], &event) == 0, "add");
   close(fds[0]);
-  require(backend.mod(fds[0], &event) == -1 && errno == EBADF,
-          "unchanged filters must still validate the fd");
-  require(backend.del(fds[0], &event) == 0, "delete closed fd");
+  require(backend.del(fds[0]) == 0, "delete closed fd");
   close(fds[1]);
 }
 #endif
@@ -130,10 +109,9 @@ int main() {
   struct Case { const char *name; void (*run)(); } cases[] = {
     {"partial add rollback", [] { failed_add(false); }},
     {"partial add with failed rollback", [] { failed_add(true); }},
-    {"failed mod preserves old registration", failed_mod},
     {"failed delete suppresses stale events", [] { failed_delete(EIO); }},
     {"interrupted delete retries", [] { failed_delete(EINTR); }},
-    {"mod validates a closed fd", mod_closed_fd},
+    {"delete tolerates a closed fd", delete_closed_fd},
   };
   int failures = 0;
   for (const auto &c : cases) {

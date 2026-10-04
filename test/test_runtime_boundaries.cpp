@@ -116,7 +116,7 @@ static void backend_instances() {
   }
   require(a.wait(100) == 1);
   require(a.event(0).data == &first);
-  require(a.del(fds[0], &ev) == 0);
+  require(a.del(fds[0]) == 0);
   close(fds[0]); close(fds[1]);
 }
 static void task_reaping() {

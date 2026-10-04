@@ -33,7 +33,6 @@ class Coroutine;
 namespace detail {
 class WaitTimer;
 class WaitRecord;
-Coroutine& RequireWaiter();
 void*& CoroutineEnvs(Coroutine&);
 }
 struct CoroutineDeleter;
@@ -74,7 +73,6 @@ private:
   int Run();
 
   friend class ThreadEnv;
-  friend Coroutine& detail::RequireWaiter();
   friend void*& detail::CoroutineEnvs(Coroutine&);
   friend class detail::WaitRecord;
   friend struct CoroutineDeleter;
