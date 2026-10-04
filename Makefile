@@ -29,7 +29,7 @@ CFLAGS += -g -fno-strict-aliasing -O2 --std=c++17 -Wall -Werror \
 
 LINKS += -g -L./lib -lcolib $(PLATFORM_LIBS)
 
-COLIB_OBJS=internal/io_backend.o co_cond.o thread_worker.o internal/context.o co_routine.o co_hook_sys_call.o
+COLIB_OBJS=internal/poll.o internal/io_backend.o co_cond.o thread_worker.o internal/context.o co_routine.o co_hook_sys_call.o
 
 ifeq ($(USE_UCONTEXT),0)
 COLIB_OBJS += internal/coctx_swap.o internal/coctx.o

@@ -17,9 +17,8 @@ available.
 * limitations under the License.
 */
 
-#include "internal/io_backend.h"
 #include "co_routine.h"
-#include "internal/event.h"
+#include "internal/util.h"
 #include "thread_worker.h"
 
 #include <signal.h>
@@ -55,33 +54,12 @@ using namespace co;
 struct task_t {
   Coroutine *co;
   int fd;
-  TimeoutItem io_event;
-  struct epoll_event ev;
 };
-
-static void OnFdReady(TimeoutItem *item) {
-  task_t *task = static_cast<task_t *>(item->arg);
-  co_resume(task->co);
-}
-
-static bool RegisterFdEvent(task_t *task) {
-  TimeoutItemLink::remove(&task->io_event);
-  task->io_event.arg = task;
-  task->io_event.prepare_func = nullptr;
-  task->io_event.process_func = OnFdReady;
-  task->io_event.timeout = false;
-  task->ev = {0};
-  task->ev.data.ptr = &task->io_event;
-  task->ev.events = (EPOLLIN | EPOLLERR | EPOLLHUP);
-  return 0 == co_get_curr_thread_env()->Epoll()->add(task->fd, &task->ev);
-}
 
 static void CloseTask(task_t *task) {
   if (task->fd < 0) {
     return;
   }
-  TimeoutItemLink::remove(&task->io_event);
-  co_get_curr_thread_env()->Epoll()->del(task->fd, &task->ev);
   close(task->fd);
   task->fd = -1;
 }
@@ -140,8 +118,8 @@ static void *readwrite_routine(void *arg) {
           continue;
         }
       } else if (-1 == ret && EAGAIN == errno) {
-        co_yield_ct();
-        continue;
+        pollfd pf{fd, POLLIN, 0};
+        if (co_poll(&pf, 1, -1) > 0) continue;
       }
       CloseTask(co);
       break;
@@ -187,12 +165,6 @@ public:
         task_t *co = g_readwrite.top();
         g_readwrite.pop();
         co->fd = fd;
-        if (!RegisterFdEvent(co)) {
-          close(fd);
-          co->fd = -1;
-          g_readwrite.push(co);
-          continue;
-        }
         co_resume(co->co);
       }
       if (!pending_fds.empty()) {

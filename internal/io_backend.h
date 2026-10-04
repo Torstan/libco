@@ -18,89 +18,29 @@ available.
 */
 
 #pragma once
-
-#include <assert.h>
-#include <stdint.h>
-#include <stdlib.h>
-#include <string.h>
-#include <sys/types.h>
-#include <time.h>
-
-#if !defined(__APPLE__) && !defined(__FreeBSD__)
-#include <sys/epoll.h>
-#else
-#include <sys/event.h>
-
-// macOS/BSD: emulate epoll API with kqueue
-enum EPOLL_EVENTS {
-  EPOLLIN = 0X001,
-  EPOLLPRI = 0X002,
-  EPOLLOUT = 0X004,
-  EPOLLERR = 0X008,
-  EPOLLHUP = 0X010,
-  EPOLLRDNORM = 0x40,
-  EPOLLWRNORM = 0x004,
-};
-
-#define EPOLL_CTL_ADD 1
-#define EPOLL_CTL_DEL 2
-#define EPOLL_CTL_MOD 3
-
-typedef union epoll_data {
-  void *ptr;
-  int fd;
-  uint32_t u32;
-  uint64_t u64;
-} epoll_data_t;
-
-struct epoll_event {
-  uint32_t events;
-  epoll_data_t data;
-};
-#endif
+#include <memory>
+#include <poll.h>
 
 namespace co {
-
-// Forward declarations
-class Timeout;
-struct TimeoutItemLink;
-
-// Event result buffer (internal)
-struct co_epoll_res {
-  int size;
-  struct epoll_event *events;
-  struct kevent *eventlist; // only used on macOS/BSD
+// Events use poll masks. Native event layout and registration storage stay private.
+struct IoEvent {
+  short events{0};
+  void *data{nullptr};
 };
-
-// Epoll context for one thread's event loop
 class EpollCtx {
 public:
   static constexpr int MAX_EVENTS = 1024 * 10;
-
   EpollCtx();
   ~EpollCtx();
-
-  // Wait for events (timeout in ms). Returns number of ready events.
   int wait(int timeout_ms = 1);
-
-  // Register/unregister file descriptors
-  int add(int fd, struct epoll_event *ev);
-  int del(int fd, struct epoll_event *ev);
-  int mod(int fd, struct epoll_event *ev);
-
-  // Accessors
-  co_epoll_res *events() { return result_; }
-  TimeoutItemLink *active_list() { return active_list_; }
-  TimeoutItemLink *timeout_list() { return timeout_list_; }
-  Timeout *timeout() { return timeout_; }
-  int fd() const { return epoll_fd_; }
-
+  int add(int fd, const IoEvent *event);
+  int del(int fd, const IoEvent *event);
+  int mod(int fd, const IoEvent *event);
+  IoEvent event(int index) const;
+  int fd() const;
 private:
-  int epoll_fd_;
-  Timeout *timeout_;
-  TimeoutItemLink *active_list_;
-  TimeoutItemLink *timeout_list_;
-  co_epoll_res *result_;
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
 };
-
+EpollCtx *co_get_epoll_ct();
 } // namespace co

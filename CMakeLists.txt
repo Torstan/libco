@@ -43,6 +43,7 @@ endif()
 
 set(LIBCO_SOURCE_FILES
         internal/io_backend.cpp
+        internal/poll.cpp
         co_cond.cpp
         thread_worker.cpp
         internal/context.cpp
@@ -101,3 +102,7 @@ add_libco_test(test_co_routine)
 add_libco_test(test_co_async)
 add_libco_test(test_co_poll)
 add_libco_test(test_public_api)
+
+add_libco_test(test_runtime_boundaries)
+add_libco_test(test_io_backend)
+add_libco_test(test_connect)

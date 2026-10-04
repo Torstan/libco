@@ -1,6 +1,7 @@
 #pragma once
 
 #include "co_future.h"
+#include "task.h"
 #include <type_traits>
 #include <memory>
 

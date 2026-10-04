@@ -30,7 +30,7 @@ CFLAGS += -I../ -g -fno-strict-aliasing -O2 --std=c++17 -Wall -Werror \
 
 LINKS += -g -L../lib -lcolib $(PLATFORM_LIBS)
 
-PROGS = test_co_routine test_co_async test_co_poll test_public_api
+PROGS = test_co_routine test_co_async test_co_poll test_public_api test_runtime_boundaries test_io_backend test_connect
 
 all:$(PROGS)
 
@@ -46,6 +46,15 @@ test_co_poll:test_co_poll.o
 	$(BUILDEXE)
 
 test_public_api:test_public_api.o
+	$(BUILDEXE)
+
+test_runtime_boundaries:test_runtime_boundaries.o
+	$(BUILDEXE)
+
+test_io_backend:test_io_backend.o
+	$(BUILDEXE)
+
+test_connect:test_connect.o
 	$(BUILDEXE)
 
 check: all

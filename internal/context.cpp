@@ -1,5 +1,4 @@
 #include "context.h"
-#include "thread_worker.h"
 #include <assert.h>
 #include <stdint.h>
 
@@ -11,7 +10,7 @@ extern void coctx_swap(coctx_t *, coctx_t *) asm("coctx_swap");
 
 typedef void (*ucontext_func_t) (void);
 
-RoutineContext::RoutineContext() : prev_link(nullptr), next_link(nullptr) {
+RoutineContext::RoutineContext() {
 #ifndef USE_UCONTEXT
   coctx_init(&ctx);
 #endif
@@ -51,34 +50,11 @@ void RoutineContext::Entry(uint32_t low, uint32_t high) {
 }
 #endif
 
-void RoutineContext::switch_in() {
-  assert(!prev_link);
-  assert(!next_link);
-  RoutineContext *prev = ThreadWorker::current_context;
-  RoutineContext *next = this;
-  ThreadWorker::current_context = next;
-  prev_link = prev;
-  prev_link->next_link = next;
+void RoutineContext::Switch(RoutineContext& from, RoutineContext& to) {
 #ifdef USE_UCONTEXT
-  swapcontext(&prev->uctx, &next->uctx);
+  swapcontext(&from.uctx, &to.uctx);
 #else
-  coctx_swap(&prev->ctx, &next->ctx);
-#endif
-}
-
-void RoutineContext::switch_out() {
-  assert(prev_link);
-  RoutineContext *prev = this;
-  RoutineContext *next = prev_link;
-  ThreadWorker::current_context = next;
-  prev_link->next_link = nullptr;
-  prev_link = nullptr;
-  assert(next_link == nullptr);
-  next_link = nullptr;
-#ifdef USE_UCONTEXT
-  swapcontext(&prev->uctx, &next->uctx);
-#else
-  coctx_swap(&prev->ctx, &next->ctx);
+  coctx_swap(&from.ctx, &to.ctx);
 #endif
 }
 

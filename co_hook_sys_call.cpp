@@ -41,21 +41,23 @@ available.
 #include <string.h>
 
 #include "co_routine.h"
+#include "internal/poll.h"
+#include "internal/hook_state.h"
 #include "internal/util.h"
-#include <map>
+#include <mutex>
 #include <time.h>
 
 using namespace co;
 
 struct rpchook_t {
   int user_flag;
-  struct sockaddr_in dest; // maybe sockaddr_un;
   int domain;              // AF_LOCAL , AF_INET
 
   struct timeval read_timeout;
   struct timeval write_timeout;
 };
 static rpchook_t *g_rpchook_socket_fd[102400] = {0};
+static std::mutex g_hook_fd_mutex;
 
 typedef int (*socket_pfn_t)(int domain, int type, int protocol);
 typedef int (*connect_pfn_t)(int socket, const struct sockaddr *address,
@@ -129,46 +131,45 @@ static constexpr int kMaxHookFdCount =
     g_sys_##name##_func = (name##_pfn_t)dlsym(RTLD_NEXT, #name);               \
   }
 
-static inline rpchook_t *get_by_fd(int fd) {
-  if (fd > -1 && fd < (int)sizeof(g_rpchook_socket_fd) /
-                          (int)sizeof(g_rpchook_socket_fd[0])) {
-    return g_rpchook_socket_fd[fd];
-  }
-  return nullptr;
+// Only use a borrowed entry while holding g_hook_fd_mutex.
+static rpchook_t *get_by_fd_locked(int fd) {
+  return fd >= 0 && fd < kMaxHookFdCount ? g_rpchook_socket_fd[fd] : nullptr;
 }
-static inline rpchook_t *alloc_by_fd(int fd) {
-  if (fd > -1 && fd < kMaxHookFdCount) {
-    rpchook_t *lp = (rpchook_t *)calloc(1, sizeof(rpchook_t));
-    lp->read_timeout.tv_sec = 1;
-    lp->write_timeout.tv_sec = 1;
-    g_rpchook_socket_fd[fd] = lp;
-    return lp;
-  }
-  return nullptr;
+
+static bool snapshot_by_fd(int fd, rpchook_t *snapshot) {
+  std::lock_guard<std::mutex> lock(g_hook_fd_mutex);
+  rpchook_t *entry = get_by_fd_locked(fd);
+  if (!entry) return false;
+  *snapshot = *entry;
+  return true;
 }
-static inline void free_by_fd(int fd) {
-  if (fd > -1 && fd < (int)sizeof(g_rpchook_socket_fd) /
-                          (int)sizeof(g_rpchook_socket_fd[0])) {
-    rpchook_t *lp = g_rpchook_socket_fd[fd];
-    if (lp) {
-      g_rpchook_socket_fd[fd] = nullptr;
-      free(lp);
-    }
+
+static bool alloc_by_fd(int fd, const rpchook_t& value) {
+  if (fd < 0 || fd >= kMaxHookFdCount) return false;
+  rpchook_t *entry = (rpchook_t *)malloc(sizeof(rpchook_t));
+  if (!entry) return false;
+  *entry = value;
+  std::lock_guard<std::mutex> lock(g_hook_fd_mutex);
+  free(g_rpchook_socket_fd[fd]);
+  g_rpchook_socket_fd[fd] = entry;
+  return true;
+}
+
+static void free_by_fd(int fd) {
+  std::lock_guard<std::mutex> lock(g_hook_fd_mutex);
+  if (fd >= 0 && fd < kMaxHookFdCount) {
+    free(g_rpchook_socket_fd[fd]);
+    g_rpchook_socket_fd[fd] = nullptr;
   }
-  return;
 }
 
 static inline int timeval_to_ms(const struct timeval &timeout) {
   return (timeout.tv_sec * 1000) + (timeout.tv_usec / 1000);
 }
 
-static inline bool should_bypass_hook(int fd, rpchook_t **hook) {
-  if (!co_is_enable_sys_hook()) {
-    *hook = nullptr;
-    return true;
-  }
-  *hook = get_by_fd(fd);
-  return !*hook || ((*hook)->user_flag & O_NONBLOCK);
+static inline bool should_bypass_hook(int fd, rpchook_t *snapshot) {
+  return !co_is_enable_sys_hook() || !snapshot_by_fd(fd, snapshot) ||
+         (snapshot->user_flag & O_NONBLOCK);
 }
 
 static int wait_for_fd(int fd, short events, int timeout_ms) {
@@ -215,12 +216,14 @@ int socket(int domain, int type, int protocol) {
     return fd;
   }
 
-  rpchook_t *lp = alloc_by_fd(fd);
-  if (lp == nullptr) {
+  rpchook_t state{};
+  state.domain = domain;
+  state.read_timeout.tv_sec = state.write_timeout.tv_sec = 1;
+  if (!alloc_by_fd(fd, state)) {
+    g_sys_close_func(fd);
     errno = ENOMEM;
     return -1;
   }
-  lp->domain = domain;
 
   fcntl(fd, F_SETFL, g_sys_fcntl_func(fd, F_GETFL, 0));
 
@@ -233,16 +236,18 @@ int co_accept(int fd, struct sockaddr *addr, socklen_t *len) {
     return cli;
   }
 
-  rpchook_t *lp = alloc_by_fd(cli);
-  if (lp == nullptr) {
+  rpchook_t state{};
+  state.read_timeout.tv_sec = state.write_timeout.tv_sec = 1;
+  rpchook_t parent{};
+  if (snapshot_by_fd(fd, &parent)) {
+    state.domain = parent.domain;
+    state.read_timeout = parent.read_timeout;
+    state.write_timeout = parent.write_timeout;
+  }
+  if (!alloc_by_fd(cli, state)) {
+    g_sys_close_func(cli);
     errno = ENOMEM;
     return -1;
-  }
-
-  if (rpchook_t *parent = get_by_fd(fd)) {
-    lp->domain = parent->domain;
-    lp->read_timeout = parent->read_timeout;
-    lp->write_timeout = parent->write_timeout;
   }
 
   fcntl(cli, F_SETFL, g_sys_fcntl_func(cli, F_GETFL, 0));
@@ -258,14 +263,8 @@ int connect(int fd, const struct sockaddr *address, socklen_t address_len) {
   // 1.sys call
   int ret = g_sys_connect_func(fd, address, address_len);
 
-  rpchook_t *lp = get_by_fd(fd);
-  if (!lp)
-    return ret;
-
-  if (sizeof(lp->dest) >= address_len) {
-    memcpy(&(lp->dest), address, (int)address_len);
-  }
-  if (O_NONBLOCK & lp->user_flag) {
+  rpchook_t state{};
+  if (!snapshot_by_fd(fd, &state) || (state.user_flag & O_NONBLOCK)) {
     return ret;
   }
 
@@ -288,9 +287,14 @@ int connect(int fd, const struct sockaddr *address, socklen_t address_len) {
     if (1 == pollret) {
       break;
     }
+    if (pollret < 0 && errno != EINTR) {
+      return -1;
+    }
   }
 
-  if (pf.revents & POLLOUT) // connect succ
+  if (pollret < 0) return -1;
+  // Error/hangup readiness also carries the connection result in SO_ERROR.
+  if (pollret > 0)
   {
     // 3.check getsockopt ret
     int err = 0;
@@ -307,7 +311,7 @@ int connect(int fd, const struct sockaddr *address, socklen_t address_len) {
   }
 
   errno = ETIMEDOUT;
-  return ret;
+  return -1;
 }
 
 int close(int fd) {
@@ -320,8 +324,9 @@ int close(int fd) {
 ssize_t read(int fd, void *buf, size_t nbyte) {
   HOOK_SYS_FUNC(read);
 
-  rpchook_t *lp = nullptr;
-  if (should_bypass_hook(fd, &lp)) {
+  rpchook_t snapshot{};
+  rpchook_t *lp = &snapshot;
+  if (should_bypass_hook(fd, lp)) {
     ssize_t ret = g_sys_read_func(fd, buf, nbyte);
     return ret;
   }
@@ -341,8 +346,9 @@ ssize_t read(int fd, void *buf, size_t nbyte) {
 ssize_t write(int fd, const void *buf, size_t nbyte) {
   HOOK_SYS_FUNC(write);
 
-  rpchook_t *lp = nullptr;
-  if (should_bypass_hook(fd, &lp)) {
+  rpchook_t snapshot{};
+  rpchook_t *lp = &snapshot;
+  if (should_bypass_hook(fd, lp)) {
     ssize_t ret = g_sys_write_func(fd, buf, nbyte);
     return ret;
   }
@@ -365,8 +371,9 @@ ssize_t sendto(int socket, const void *message, size_t length, int flags,
   */
   HOOK_SYS_FUNC(sendto);
 
-  rpchook_t *lp = nullptr;
-  if (should_bypass_hook(socket, &lp)) {
+  rpchook_t snapshot{};
+  rpchook_t *lp = &snapshot;
+  if (should_bypass_hook(socket, lp)) {
     return g_sys_sendto_func(socket, message, length, flags, dest_addr,
                              dest_len);
   }
@@ -388,8 +395,9 @@ ssize_t recvfrom(int socket, void *buffer, size_t length, int flags,
                  struct sockaddr *address, socklen_t *address_len) {
   HOOK_SYS_FUNC(recvfrom);
 
-  rpchook_t *lp = nullptr;
-  if (should_bypass_hook(socket, &lp)) {
+  rpchook_t snapshot{};
+  rpchook_t *lp = &snapshot;
+  if (should_bypass_hook(socket, lp)) {
     return g_sys_recvfrom_func(socket, buffer, length, flags, address,
                                address_len);
   }
@@ -406,8 +414,9 @@ ssize_t recvfrom(int socket, void *buffer, size_t length, int flags,
 ssize_t send(int socket, const void *buffer, size_t length, int flags) {
   HOOK_SYS_FUNC(send);
 
-  rpchook_t *lp = nullptr;
-  if (should_bypass_hook(socket, &lp)) {
+  rpchook_t snapshot{};
+  rpchook_t *lp = &snapshot;
+  if (should_bypass_hook(socket, lp)) {
     return g_sys_send_func(socket, buffer, length, flags);
   }
   int timeout = timeval_to_ms(lp->write_timeout);
@@ -422,8 +431,9 @@ ssize_t send(int socket, const void *buffer, size_t length, int flags) {
 ssize_t recv(int socket, void *buffer, size_t length, int flags) {
   HOOK_SYS_FUNC(recv);
 
-  rpchook_t *lp = nullptr;
-  if (should_bypass_hook(socket, &lp)) {
+  rpchook_t snapshot{};
+  rpchook_t *lp = &snapshot;
+  if (should_bypass_hook(socket, lp)) {
     return g_sys_recv_func(socket, buffer, length, flags);
   }
   int timeout = timeval_to_ms(lp->read_timeout);
@@ -440,60 +450,12 @@ ssize_t recv(int socket, void *buffer, size_t length, int flags) {
   return readret;
 }
 
-namespace co {
-extern int co_poll_inner(struct pollfd fds[], nfds_t nfds, int timeout,
-                         int (*pollfunc)(struct pollfd[], nfds_t, int));
-} // namespace co
-
 int poll(struct pollfd fds[], nfds_t nfds, int timeout) {
   HOOK_SYS_FUNC(poll);
-
   if (!co_is_enable_sys_hook() || timeout == 0) {
     return g_sys_poll_func(fds, nfds, timeout);
   }
-  pollfd *fds_merge = nullptr;
-  nfds_t nfds_merge = 0;
-  std::map<int, int> m; // fd --> idx
-  std::map<int, int>::iterator it;
-  if (nfds > 1) {
-    fds_merge = (pollfd *)malloc(sizeof(pollfd) * nfds);
-    for (size_t i = 0; i < nfds; i++) {
-      fds[i].revents = 0;
-      if ((it = m.find(fds[i].fd)) == m.end()) {
-        fds_merge[nfds_merge] = fds[i];
-        fds_merge[nfds_merge].revents = 0;
-        m[fds[i].fd] = nfds_merge;
-        nfds_merge++;
-      } else {
-        int j = it->second;
-        fds_merge[j].events |= fds[i].events; // merge in j slot
-      }
-    }
-  }
-
-  int ret = 0;
-  if (nfds_merge == nfds || nfds == 1) {
-    ret = co_poll_inner(fds, nfds, timeout, g_sys_poll_func);
-  } else {
-    ret = co_poll_inner(fds_merge, nfds_merge, timeout, g_sys_poll_func);
-    if (ret > 0) {
-      ret = 0;
-      const short always_reported = POLLERR | POLLHUP | POLLNVAL;
-      for (size_t i = 0; i < nfds; i++) {
-        it = m.find(fds[i].fd);
-        if (it != m.end()) {
-          int j = it->second;
-          fds[i].revents =
-              fds_merge[j].revents & (fds[i].events | always_reported);
-          if (fds[i].revents) {
-            ++ret;
-          }
-        }
-      }
-    }
-  }
-  free(fds_merge);
-  return ret;
+  return co::detail::PollWait(fds, nfds, timeout, g_sys_poll_func);
 }
 int setsockopt(int fd, int level, int option_name, const void *option_value,
                socklen_t option_len) {
@@ -503,13 +465,16 @@ int setsockopt(int fd, int level, int option_name, const void *option_value,
     return g_sys_setsockopt_func(fd, level, option_name, option_value,
                                  option_len);
   }
+  // Serialize the native update with its cached value and metadata retirement.
+  // This native control call cannot yield through our coroutine hooks.
+  std::lock_guard<std::mutex> lock(g_hook_fd_mutex);
   // Let the kernel validate the arguments before reading or caching them.
   int ret = g_sys_setsockopt_func(fd, level, option_name, option_value,
                                  option_len);
   if (ret != 0) {
     return ret;
   }
-  rpchook_t *lp = get_by_fd(fd);
+  rpchook_t *lp = get_by_fd_locked(fd);
 
   if (lp && SOL_SOCKET == level && option_value &&
       option_len >= sizeof(struct timeval)) {
@@ -525,7 +490,7 @@ int setsockopt(int fd, int level, int option_name, const void *option_value,
 
 static int handle_f_getfl(int fd, rpchook_t *hook) {
   int ret = g_sys_fcntl_func(fd, F_GETFL);
-  if (hook && !(hook->user_flag & O_NONBLOCK)) {
+  if (ret >= 0 && hook && !(hook->user_flag & O_NONBLOCK)) {
     ret = ret & (~O_NONBLOCK);
   }
   return ret;
@@ -555,7 +520,6 @@ int fcntl(int fildes, int cmd, ...) {
   va_start(arg_list, cmd);
 
   int ret = -1;
-  rpchook_t *lp = get_by_fd(fildes);
   switch (cmd) {
   case F_DUPFD: {
     int param = va_arg(arg_list, int);
@@ -579,12 +543,14 @@ int fcntl(int fildes, int cmd, ...) {
     break;
   }
   case F_GETFL: {
-    ret = handle_f_getfl(fildes, lp);
+    std::lock_guard<std::mutex> lock(g_hook_fd_mutex);
+    ret = handle_f_getfl(fildes, get_by_fd_locked(fildes));
     break;
   }
   case F_SETFL: {
     int param = va_arg(arg_list, int);
-    ret = handle_f_setfl(fildes, param, lp);
+    std::lock_guard<std::mutex> lock(g_hook_fd_mutex);
+    ret = handle_f_setfl(fildes, param, get_by_fd_locked(fildes));
     break;
   }
   case F_GETOWN: {
@@ -792,13 +758,13 @@ static stCoSysEnv_t *find_coroutine_env(const char *name, bool create) {
   if (!self) {
     return nullptr;
   }
-  if (create && !self->GetSysEnvs()) {
-    self->GetSysEnvs() = dup_co_sysenv_arr(&g_co_sysenv);
+  if (create && !co::detail::CoroutineEnvs(*self)) {
+    co::detail::CoroutineEnvs(*self) = dup_co_sysenv_arr(&g_co_sysenv);
   }
-  if (!self->GetSysEnvs()) {
+  if (!co::detail::CoroutineEnvs(*self)) {
     return nullptr;
   }
-  stCoSysEnvArr_t *arr = (stCoSysEnvArr_t *)(self->GetSysEnvs());
+  stCoSysEnvArr_t *arr = (stCoSysEnvArr_t *)(co::detail::CoroutineEnvs(*self));
   stCoSysEnv_t key = {(char *)name, 0};
   return (stCoSysEnv_t *)bsearch(&key, arr->data, arr->cnt, sizeof(key),
                                  co_sysenv_comp);

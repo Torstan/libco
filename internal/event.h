@@ -1,27 +1,23 @@
 #pragma once
-
-#include "io_backend.h"
-#include "co_link.h"
+#include "wait.h"
+#include "timer_queue.h"
+#include <cstdint>
 
 namespace co {
-
-struct TimeoutItem;
-struct TimeoutItemLink;
-
-typedef void (*prepare_func_t)(TimeoutItem *, struct epoll_event &ev,
-                               TimeoutItemLink *active);
-typedef void (*process_func_t)(TimeoutItem *);
-
-struct TimeoutItem : public LinkItemBase<TimeoutItem> {
-  unsigned long long expire_time_ms;
-
-  prepare_func_t prepare_func;
-  process_func_t process_func;
-
-  void *arg; // routine
-  bool timeout;
+namespace detail {
+// I/O-specific completion adapter. The backend treats this as an opaque payload.
+struct IoSource {
+  void (*notify)(IoSource*, uint32_t);
 };
-
-struct TimeoutItemLink : LinkedList<TimeoutItem> {};
-
-} // namespace co
+class WaitTimer : public TimerItem {
+public:
+  explicit WaitTimer(WaitRecord& waiter) : waiter_(waiter) {}
+  ~WaitTimer() { Cancel(); }
+  int Arm(unsigned long long deadline);
+  void Cancel() noexcept { Timeout::Remove(this); }
+private:
+  WaitRecord& waiter_;
+  friend class co::ThreadEnv;
+};
+}
+}

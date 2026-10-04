@@ -21,11 +21,15 @@ available.
 #include "internal/io_backend.h"
 #include "internal/co_link.h"
 #include "internal/timer_queue.h"
+#include "internal/event.h"
 #include "internal/context.h"
-#include "thread_worker.h"
+#include "internal/stack.h"
+#include "internal/hook_state.h"
+#include <deque>
+#include "task.h"
+#include "internal/poll.h"
 #include "internal/util.h"
 
-#include <map>
 #include <memory>
 #include <new>
 #include <stdio.h>
@@ -33,6 +37,7 @@ available.
 #include <string.h>
 #include <string>
 #include <system_error>
+#include <stdexcept>
 
 #include <errno.h>
 #include <poll.h>
@@ -67,34 +72,70 @@ public:
 static thread_local ThreadEnvTls gCoEnvPerThread;
 static constexpr int kDefaultStackSize = 256 * 1024;
 
-static int CoRoutineFunc(void *arg, void *) {
+struct Coroutine::Impl {
+  RoutineContext routine_ctx_;
+  ThreadEnv *owner_{ThreadEnv::Current()};
+  Coroutine *caller_{nullptr};
+  detail::WaitRecord *waiting_{nullptr};
+  Coroutine *finished_next_{nullptr};
+  bool auto_reap_{false};
+  std::function<void()> func_;
+  bool started_{false};
+  bool ended_{false};
+  bool is_main_{false};
+  bool enable_sys_hook_{false};
+  void *sys_envs_{nullptr};
+  std::unique_ptr<StackMem> stack_mem_;
+  explicit Impl(std::function<void()>&& func) : func_(std::move(func)) {
+    if (func_) {
+      stack_mem_ = std::make_unique<StackMem>(kDefaultStackSize);
+      routine_ctx_.InitCtx(stack_mem_->GetStackBuffer(), kDefaultStackSize);
+    }
+  }
+};
+
+struct CoroutineDeleter {
+  void operator()(Coroutine *co) const;
+};
+
+struct ThreadEnv::Impl {
+  std::unique_ptr<EpollCtx> epoll_ctx_{std::make_unique<EpollCtx>()};
+  std::unique_ptr<Coroutine, CoroutineDeleter> main_coroutine_;
+  Coroutine *current_{nullptr};
+  std::unique_ptr<Timeout> timers_{std::make_unique<Timeout>()};
+  LinkedList<detail::WaitRecord> ready_;
+  std::deque<std::unique_ptr<Task>> pending_tasks_;
+  Coroutine *finished_coroutines_{nullptr};
+};
+
+void Coroutine::EnableHook() { impl_->enable_sys_hook_ = true; }
+void Coroutine::DisableHook() { impl_->enable_sys_hook_ = false; }
+bool Coroutine::IsHookEnabled() const { return impl_->enable_sys_hook_; }
+void*& detail::CoroutineEnvs(Coroutine& co) { return co.impl_->sys_envs_; }
+
+int Coroutine::Entry(void *arg, void *) {
   auto co = static_cast<Coroutine*>(arg);
   return co->Run();
 }
 
 int Coroutine::Run() {
   try {
-    if (func_) {
-      func_();
+    if (impl_->func_) {
+      impl_->func_();
     }
   } catch (...) {
   }
-  ended_ = true;
+  impl_->ended_ = true;
   co_yield_ct();
   return 0;
 }
 
 // Coroutine class implementation
 Coroutine::Coroutine(std::function<void()>&& func)
-    : func_(std::move(func)), started_(false), ended_(false), is_main_(false),
-      enable_sys_hook_(false), sys_envs_(nullptr), stack_mem_(nullptr) {
-  if (func_) {
-    stack_mem_ = std::make_unique<StackMem>(kDefaultStackSize);
-    routine_ctx_.InitCtx(stack_mem_->GetStackBuffer(), kDefaultStackSize);
-  }
-}
+    : impl_(std::make_unique<Impl>(std::move(func))) {}
 
 Coroutine::~Coroutine() {
+  co_cleanup_sys_envs(impl_->sys_envs_);
 }
 
 void CoroutineDeleter::operator()(Coroutine *co) const { delete co; }
@@ -115,47 +156,80 @@ Coroutine *Coroutine::Create(std::function<void()>&& func) {
 }
 
 Coroutine *Coroutine::Self() {
-  if (!ThreadWorker::current_context)
-    return nullptr;
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Winvalid-offsetof"
-  return container_of(ThreadWorker::current_context, Coroutine, routine_ctx_);
-#pragma GCC diagnostic pop
+  ThreadEnv* env = ThreadEnv::Current();
+  return env ? env->impl_->current_ : nullptr;
 }
 
-void Coroutine::Yield() { routine_ctx_.switch_out(); }
+Coroutine& detail::RequireWaiter() {
+  Coroutine* co = Coroutine::Self();
+  if (!co || co->impl_->is_main_) {
+    throw std::logic_error("cannot wait on a not-ready Future without a coroutine context");
+  }
+  return *co;
+}
 
-void Coroutine::Resume() {
-  if (ended_) {
-    return;
+void Coroutine::Yield() { impl_->owner_->Yield(*this); }
+void Coroutine::Resume() { impl_->owner_->Resume(*this); }
+
+void ThreadEnv::Resume(Coroutine& co) {
+  if (Current() != this || co.impl_->is_main_ || co.impl_->owner_ != this || co.impl_->caller_ || co.impl_->waiting_ || impl_->current_ == &co) {
+    throw std::logic_error("cannot resume an active or foreign coroutine");
   }
-  if (!started_) {
-    routine_ctx_.MakeCtx((coctx_func_t)CoRoutineFunc, this);
-    started_ = true;
+  if (co.impl_->ended_) return;
+  if (!co.impl_->started_) {
+    co.impl_->routine_ctx_.MakeCtx(Coroutine::Entry, &co);
+    co.impl_->started_ = true;
   }
-  routine_ctx_.switch_in();
+  Coroutine* previous = impl_->current_;
+  co.impl_->caller_ = previous;
+  impl_->current_ = &co;
+  RoutineContext::Switch(previous->impl_->routine_ctx_, co.impl_->routine_ctx_);
+  if (co.impl_->ended_ && co.impl_->auto_reap_) {
+    // Task destruction has finished and its stack is no longer active.
+    // Register for reaping without allocating or yielding.
+    co.impl_->finished_next_ = impl_->finished_coroutines_;
+    impl_->finished_coroutines_ = &co;
+  }
+}
+
+void ThreadEnv::Yield(Coroutine& co) {
+  if (Current() != this || impl_->current_ != &co || !co.impl_->caller_) {
+    throw std::logic_error("cannot yield without a coroutine caller");
+  }
+  Coroutine* caller = co.impl_->caller_;
+  co.impl_->caller_ = nullptr;
+  impl_->current_ = caller;
+  RoutineContext::Switch(co.impl_->routine_ctx_, caller->impl_->routine_ctx_);
 }
 
 void Coroutine::Reset() {
-  if (is_main_ || !stack_mem_) {
+  if (ThreadEnv::Current() != impl_->owner_ || impl_->auto_reap_ || (impl_->started_ && !impl_->ended_)) {
+    throw std::logic_error("cannot reset a scheduler-owned, running or suspended coroutine");
+  }
+  if (impl_->is_main_ || !impl_->stack_mem_) {
     return;
   }
-  started_ = false;
-  ended_ = false;
-  routine_ctx_.InitCtx(stack_mem_->GetStackBuffer(), kDefaultStackSize);
+  impl_->started_ = false;
+  impl_->ended_ = false;
+  impl_->routine_ctx_.InitCtx(impl_->stack_mem_->GetStackBuffer(), kDefaultStackSize);
 }
 
-void Coroutine::Free() { delete this; }
+void Coroutine::Free() {
+  if (ThreadEnv::Current() != impl_->owner_ || impl_->is_main_ || impl_->auto_reap_ || (impl_->started_ && !impl_->ended_)) {
+    throw std::logic_error("cannot free a main, scheduler-owned, running or suspended coroutine");
+  }
+  delete this;
+}
 
 int co_accept(int fd, struct sockaddr *addr, socklen_t *len) {
   return ::co_accept(fd, addr, len);
 }
 
 // ThreadEnv class implementation
-ThreadEnv::ThreadEnv() : epoll_ctx_(std::make_unique<EpollCtx>()) {}
+ThreadEnv::ThreadEnv() : impl_(std::make_unique<Impl>()) {}
 
 ThreadEnv::~ThreadEnv() {
-  ThreadWorker::current_context = nullptr;
+  Reap();
 }
 
 ThreadEnv *ThreadEnv::Current() { return gCoEnvPerThread.env; }
@@ -168,13 +242,14 @@ bool ThreadEnv::Init() {
   try {
     ThreadEnv *env = new ThreadEnv();
     try {
-      env->main_coroutine_.reset(new Coroutine([](){}));
+      env->impl_->main_coroutine_.reset(new Coroutine({}));
     } catch (...) {
       delete env;
       throw;
     }
-    env->main_coroutine_->SetMain();
-    ThreadWorker::current_context = &env->main_coroutine_->routine_ctx_;
+    env->impl_->main_coroutine_->impl_->is_main_ = true;
+    env->impl_->main_coroutine_->impl_->owner_ = env;
+    env->impl_->current_ = env->impl_->main_coroutine_.get();
     gCoEnvPerThread.env = env;
     return true;
   } catch (const std::bad_alloc &) {
@@ -186,444 +261,147 @@ bool ThreadEnv::Init() {
   }
 }
 
-// int poll(struct pollfd fds[], nfds_t nfds, int timeout);
-//  { fd,events,revents }
-struct PollItem;
-struct PollBase : public TimeoutItem {
-  struct pollfd *fds{nullptr};
-  nfds_t nfds{0}; // typedef unsigned long int nfds_t;
-  PollItem *poll_items{nullptr};
-  int all_event_detach{0};
-  int epoll_fd{0};
-  int raise_cnt{0};
-};
-struct PollItem : public TimeoutItem {
-  struct pollfd *self_pfd{nullptr};
-  PollBase *poll{nullptr};
-  int registered_fd{-1};
-  bool owns_registered_fd{false};
-
-  struct epoll_event ep_event;
-};
-
-typedef int (*poll_func_t)(struct pollfd fds[], nfds_t nfds, int timeout);
-
-static int SystemPoll(struct pollfd fds[], nfds_t nfds, int timeout) {
-  return ::poll(fds, nfds, timeout);
+void ThreadEnv::Reap() {
+  while (auto* co = impl_->finished_coroutines_) {
+    impl_->finished_coroutines_ = co->impl_->finished_next_;
+    delete co;
+  }
 }
 
-static int DupFdCloseOnExec(int fd) {
-#ifdef F_DUPFD_CLOEXEC
-  {
-    int dup_fd = fcntl(fd, F_DUPFD_CLOEXEC, 0);
-    if (dup_fd >= 0) {
-      return dup_fd;
+void ThreadEnv::RunTasks() {
+  Reap();
+  do {
+    while (!impl_->pending_tasks_.empty()) {
+      std::unique_ptr<Task> task = std::move(impl_->pending_tasks_.front());
+      impl_->pending_tasks_.pop_front();
+      Task* borrowed = task.get();
+      Coroutine* co = co_create([borrowed] {
+        std::unique_ptr<Task> owned(borrowed);
+        owned->run();
+      });
+      if (!co) throw std::bad_alloc();
+      co->impl_->auto_reap_ = true;
+      task.release();
+      co_resume(co);
     }
-  }
-  int dup_errno = errno;
-  if (dup_errno != EINVAL) {
-    errno = dup_errno;
-    return -1;
-  }
-#endif
-
-  int dup_fd = dup(fd);
-  if (dup_fd < 0) {
-    return -1;
-  }
-  int flags = fcntl(dup_fd, F_GETFD);
-  if (flags < 0) {
-    int dup_errno = errno;
-    close(dup_fd);
-    errno = dup_errno;
-    return -1;
-  }
-  if (fcntl(dup_fd, F_SETFD, flags | FD_CLOEXEC) < 0) {
-    int dup_errno = errno;
-    close(dup_fd);
-    errno = dup_errno;
-    return -1;
-  }
-  return dup_fd;
+    RunReady();
+    Reap();
+  } while (!impl_->pending_tasks_.empty());
 }
 
-static void PollProcessFunc(TimeoutItem *item);
-
-static constexpr nfds_t kStackPollItemCount = 2;
-
-class PollState {
- public:
-  PollState(EpollCtx *ep_ctx, struct pollfd fds[], nfds_t nfds,
-            Coroutine *owner)
-      : poll_(std::make_unique<PollBase>()) {
-    std::unique_ptr<pollfd[]> owned_fds(new pollfd[nfds]);
-    poll_->epoll_fd = ep_ctx->fd();
-    for (nfds_t i = 0; i < nfds; ++i) {
-      owned_fds[i] = fds[i];
-      owned_fds[i].revents = 0;
-    }
-    std::unique_ptr<PollItem[]> owned_items;
-    if (nfds > kStackPollItemCount) {
-      owned_items.reset(new PollItem[nfds]);
-    }
-
-    poll_->fds = owned_fds.release();
-    poll_->nfds = nfds;
-    poll_->poll_items =
-        nfds <= kStackPollItemCount ? stack_items_ : owned_items.release();
-    poll_->process_func = PollProcessFunc;
-    poll_->arg = owner;
-  }
-
-  ~PollState() {
-    if (poll_->poll_items != stack_items_) {
-      delete[] poll_->poll_items;
-      poll_->poll_items = nullptr;
-    }
-    delete[] poll_->fds;
-    poll_->fds = nullptr;
-  }
-
-  PollBase *poll() { return poll_.get(); }
-
- private:
-  std::unique_ptr<PollBase> poll_;
-  PollItem stack_items_[kStackPollItemCount];
-};
-/*
- *   EPOLLPRI 		POLLPRI    // There is urgent data to read.
- *   EPOLLMSG 		POLLMSG
- *
- *   				POLLREMOVE
- *   				POLLRDHUP
- *   				POLLNVAL
- *
- * */
-static uint32_t PollEvent2Epoll(short events) {
-  uint32_t e = 0;
-  if (events & POLLIN)
-    e |= EPOLLIN;
-  if (events & POLLOUT)
-    e |= EPOLLOUT;
-  if (events & POLLHUP)
-    e |= EPOLLHUP;
-  if (events & POLLERR)
-    e |= EPOLLERR;
-  if (events & POLLRDNORM)
-    e |= EPOLLRDNORM;
-  if (events & POLLWRNORM)
-    e |= EPOLLWRNORM;
-  return e;
-}
-static short EpollEvent2Poll(uint32_t events) {
-  short e = 0;
-  if (events & EPOLLIN)
-    e |= POLLIN;
-  if (events & EPOLLOUT)
-    e |= POLLOUT;
-  if (events & EPOLLHUP)
-    e |= POLLHUP;
-  if (events & EPOLLERR)
-    e |= POLLERR;
-  if (events & EPOLLRDNORM)
-    e |= POLLRDNORM;
-  if (events & EPOLLWRNORM)
-    e |= POLLWRNORM;
-  return e;
-}
-
-static void PollProcessFunc(TimeoutItem *item) {
-  Coroutine *co = (Coroutine *)item->arg;
-  co_resume(co);
-}
-
-static void PollPrepareFunc(TimeoutItem *timeout_item, struct epoll_event &e,
-                            TimeoutItemLink *active) {
-  PollItem *item = (PollItem *)timeout_item;
-  item->self_pfd->revents = EpollEvent2Poll(e.events);
-  PollBase *poll = item->poll;
-  poll->raise_cnt++;
-
-  if (!poll->all_event_detach) {
-    poll->all_event_detach = 1;
-    TimeoutItemLink::remove(poll);
-    active->add_tail(poll);
+void ThreadEnv::RunReady() {
+  while (auto* wait = impl_->ready_.pop_head()) {
+    Coroutine* co = wait->coroutine_;
+    wait->Detach();
+    co->impl_->waiting_ = nullptr;
+    Resume(*co);
   }
 }
 
-enum class PollRegisterResult {
-  kRegistered,
-  kError,
-};
-
-static PollRegisterResult RegisterPollFds(EpollCtx *ep_ctx,
-                                          struct pollfd fds[], nfds_t nfds,
-                                          PollBase *poll) {
-  for (nfds_t i = 0; i < nfds; i++) {
-    PollItem &item = poll->poll_items[i];
-    item.self_pfd = poll->fds + i;
-    item.poll = poll;
-    item.registered_fd = -1;
-    item.owns_registered_fd = false;
-
-    item.prepare_func = PollPrepareFunc;
-    struct epoll_event &ev = item.ep_event;
-
-    if (fds[i].fd > -1) {
-      ev.data.ptr = &item;
-      ev.events = PollEvent2Epoll(fds[i].events);
-
-      int ret = ep_ctx->add(fds[i].fd, &ev);
-      int registered_fd = fds[i].fd;
-      bool owns_registered_fd = false;
-      if (ret < 0 && errno == EEXIST) {
-        int dup_fd = DupFdCloseOnExec(fds[i].fd);
-        if (dup_fd >= 0) {
-          ret = ep_ctx->add(dup_fd, &ev);
-          if (ret == 0) {
-            registered_fd = dup_fd;
-            owns_registered_fd = true;
-          } else {
-            int add_errno = errno;
-            close(dup_fd);
-            errno = add_errno;
-          }
-        }
-      }
-      if (ret < 0) {
-        return PollRegisterResult::kError;
-      }
-      item.registered_fd = registered_fd;
-      item.owns_registered_fd = owns_registered_fd;
-    }
+namespace detail {
+WaitRecord::WaitRecord() : coroutine_(&RequireWaiter()), owner_(ThreadEnv::Current()) {
+  if (coroutine_->impl_->waiting_) throw std::logic_error("coroutine already waiting");
+  coroutine_->impl_->waiting_ = this;
+}
+WaitRecord::~WaitRecord() {
+  LinkedList<WaitRecord>::remove(this);
+  Detach();
+  if (coroutine_->impl_->waiting_ == this) coroutine_->impl_->waiting_ = nullptr;
+}
+void WaitRecord::SetCleanup(void (*cleanup)(void*) noexcept, void *arg) {
+  cleanup_ = cleanup;
+  arg_ = arg;
+}
+void WaitRecord::Detach() noexcept {
+  auto cleanup = cleanup_;
+  cleanup_ = nullptr;
+  if (cleanup) cleanup(arg_);
+}
+void WaitRecord::Suspend() {
+  if (owner_ != ThreadEnv::Current() || coroutine_ != Coroutine::Self()) {
+    throw std::logic_error("wait belongs to another coroutine");
   }
-  return PollRegisterResult::kRegistered;
+  if (completed_) return;
+  suspended_ = true;
+  coroutine_->Yield();
+}
+void WaitRecord::Complete() {
+  if (owner_ != ThreadEnv::Current()) {
+    throw std::logic_error("cross-thread completion is unsupported");
+  }
+  if (completed_) return;
+  completed_ = true;
+  if (suspended_) owner_->impl_->ready_.add_tail(this);
+}
+int WaitTimer::Arm(unsigned long long deadline) {
+  expire_time_ms = deadline;
+  const auto now = GetTickMS();
+  if (deadline <= now) {
+    waiter_.Complete();
+    return 0;
+  }
+  return waiter_.owner_->impl_->timers_->AddItem(this, now);
+}
+} // namespace detail
+
+int ThreadEnv::LoopCallback(void* arg) {
+  static_cast<ThreadEnv*>(arg)->RunTasks();
+  return 0;
 }
 
-static void CleanupPoll(EpollCtx *ep_ctx, struct pollfd fds[], PollBase *poll) {
-  TimeoutItemLink::remove(poll);
-  for (nfds_t i = 0; i < poll->nfds; i++) {
-    PollItem &item = poll->poll_items[i];
-    int fd = item.registered_fd;
-    if (fd > -1) {
-      ep_ctx->del(fd, &item.ep_event);
-      if (item.owns_registered_fd) {
-        close(fd);
-      }
-      item.registered_fd = -1;
-      item.owns_registered_fd = false;
-    }
-    fds[i].revents = poll->fds[i].revents;
-  }
+void ThreadEnv::RunLoop(bool forever) {
+  RunTasks();
+  if (forever) co_eventloop(LoopCallback, this);
 }
 
-int co_poll_inner(struct pollfd fds[], nfds_t nfds, int timeout,
-                  poll_func_t poll_func) {
-  // Preserve native readiness/error semantics before using the async backend.
-  int ready = poll_func ? poll_func(fds, nfds, 0) : SystemPoll(fds, nfds, 0);
-  if (ready != 0 || timeout == 0) {
-    return ready;
-  }
-  EpollCtx *ep_ctx = co_get_epoll_ct();
-  if (!ep_ctx) {
-    if (errno == 0) {
-      errno = ENOMEM;
-    }
-    return -1;
-  }
-  if (timeout < 0) {
-    timeout = INT_MAX;
-  }
-
-  std::unique_ptr<PollState> state;
-  try {
-    state.reset(new PollState(ep_ctx, fds, nfds, co_self()));
-  } catch (const std::bad_alloc &) {
-    errno = ENOMEM;
-    return -1;
-  }
-  PollBase *poll = state->poll();
-
-  PollRegisterResult register_result =
-      RegisterPollFds(ep_ctx, fds, nfds, poll);
-  if (register_result == PollRegisterResult::kError) {
-    int register_errno = errno;
-    CleanupPoll(ep_ctx, fds, poll);
-    errno = register_errno;
-    return -1;
-  }
-
-  unsigned long long now = GetTickMS();
-  poll->expire_time_ms = now + timeout;
-  int ret = ep_ctx->timeout()->AddItem(poll, now);
-  int raise_cnt = 0;
-  if (ret != 0) {
-    co_log_err(
-        "CO_ERR: AddItem ret %d now %lld timeout %d arg.expire_time_ms %lld",
-        ret, now, timeout, poll->expire_time_ms);
-    errno = EINVAL;
-    raise_cnt = -1;
-
-  } else {
-    co_yield_ct();
-    raise_cnt = poll->raise_cnt;
-  }
-
-  CleanupPoll(ep_ctx, fds, poll);
-  return raise_cnt;
+void schedule(std::unique_ptr<Task> task) {
+  if (!ThreadEnv::Init()) throw std::bad_alloc();
+  ThreadEnv::Current()->impl_->pending_tasks_.push_back(std::move(task));
+}
+void schedule_urgent(std::unique_ptr<Task> task) {
+  if (!ThreadEnv::Init()) throw std::bad_alloc();
+  ThreadEnv::Current()->impl_->pending_tasks_.push_front(std::move(task));
 }
 
 int co_poll(struct pollfd fds[], nfds_t nfds, int timeout_ms) {
-  if (nfds <= 1) {
-    return co_poll_inner(fds, nfds, timeout_ms, nullptr);
-  }
-
-  std::map<int, nfds_t> fd_to_merged_idx;
-  std::unique_ptr<pollfd[]> fds_merge;
-  try {
-    fds_merge.reset(new pollfd[nfds]);
-  } catch (const std::bad_alloc &) {
-    errno = ENOMEM;
-    return -1;
-  }
-
-  nfds_t nfds_merge = 0;
-  bool has_duplicate = false;
-  for (nfds_t i = 0; i < nfds; ++i) {
-    fds[i].revents = 0;
-    std::pair<std::map<int, nfds_t>::iterator, bool> ret;
-    try {
-      ret = fd_to_merged_idx.insert(std::make_pair(fds[i].fd, nfds_merge));
-    } catch (const std::bad_alloc &) {
-      errno = ENOMEM;
-      return -1;
-    }
-    if (ret.second) {
-      fds_merge[nfds_merge] = fds[i];
-      fds_merge[nfds_merge].revents = 0;
-      ++nfds_merge;
-    } else {
-      fds_merge[ret.first->second].events |= fds[i].events;
-      has_duplicate = true;
-    }
-  }
-
-  if (!has_duplicate) {
-    return co_poll_inner(fds, nfds, timeout_ms, nullptr);
-  }
-
-  int ret = co_poll_inner(fds_merge.get(), nfds_merge, timeout_ms, nullptr);
-  if (ret <= 0) {
-    return ret;
-  }
-
-  ret = 0;
-  const short always_reported = POLLERR | POLLHUP | POLLNVAL;
-  for (nfds_t i = 0; i < nfds; ++i) {
-    auto it = fd_to_merged_idx.find(fds[i].fd);
-    if (it == fd_to_merged_idx.end()) {
-      continue;
-    }
-    fds[i].revents =
-        fds_merge[it->second].revents & (fds[i].events | always_reported);
-    if (fds[i].revents) {
-      ++ret;
-    }
-  }
-  return ret;
+  return detail::PollWait(fds, nfds, timeout_ms, nullptr);
 }
 
-static void CollectReadyEvents(EpollCtx *ep_ctx, int event_count,
-                               TimeoutItemLink *active) {
-  for (int i = 0; i < event_count; i++) {
-    epoll_event &ev = ep_ctx->events()->events[i];
-    TimeoutItem *item = (TimeoutItem *)ev.data.ptr;
-    if (item->prepare_func) {
-      item->prepare_func(item, ev, active);
-    } else {
-      active->add_tail(item);
+void ThreadEnv::EventLoop(pfn_co_eventloop_t func, void *arg) {
+  for (;;) {
+    int ret = impl_->epoll_ctx_->wait(1);
+    if (ret < 0) {
+      if (errno != EINTR) break;
+      ret = 0;
     }
-  }
-}
-
-static void CollectTimeouts(EpollCtx *ep_ctx, unsigned long long now,
-                            TimeoutItemLink *timeout) {
-  ep_ctx->timeout()->TakeAll(now, timeout);
-
-  TimeoutItem *item = timeout->head;
-  while (item) {
-    item->timeout = true;
-    item = item->next;
-  }
-}
-
-static void DispatchActiveItems(EpollCtx *ep_ctx, unsigned long long now,
-                                TimeoutItemLink *active) {
-  TimeoutItem *item = active->head;
-  while (item) {
-    active->pop_head();
-    if (item->timeout && now < item->expire_time_ms) {
-      int ret = ep_ctx->timeout()->AddItem(item, now);
-      if (!ret) {
-        item->timeout = false;
-        item = active->head;
-        continue;
-      }
+    // Collect the complete batch before any waiter may destroy registrations.
+    for (int i = 0; i < ret; ++i) {
+      auto ev = impl_->epoll_ctx_->event(i);
+      auto* source = static_cast<detail::IoSource*>(ev.data);
+      source->notify(source, ev.events);
     }
-    if (item->process_func) {
-      item->process_func(item);
+    auto now = GetTickMS();
+    TimerList expired;
+    impl_->timers_->TakeAll(now, &expired);
+    while (auto* item = expired.pop_head()) {
+      static_cast<detail::WaitTimer*>(item)->waiter_.Complete();
     }
-
-    item = active->head;
+    RunReady();
+    Reap();
+    if (func && func(arg) == -1) break;
   }
 }
 
 void co_eventloop(pfn_co_eventloop_t func, void *arg) {
-  EpollCtx *ep_ctx = co_get_epoll_ct();
-  if (!ep_ctx) {
-    if (errno == 0) {
-      errno = ENOMEM;
-    }
-    return;
-  }
-
-  for (;;) {
-    int ret = ep_ctx->wait(1);
-    if (ret < 0) {
-      int wait_errno = errno;
-      if (wait_errno == EINTR) {
-        ret = 0;
-      } else {
-        errno = wait_errno;
-        break;
-      }
-    }
-
-    TimeoutItemLink *active = ep_ctx->active_list();
-    TimeoutItemLink *timeout = ep_ctx->timeout_list();
-    timeout->clear();
-
-    CollectReadyEvents(ep_ctx, ret, active);
-
-    unsigned long long now = GetTickMS();
-    CollectTimeouts(ep_ctx, now, timeout);
-
-    active->join(*timeout);
-    DispatchActiveItems(ep_ctx, now, active);
-
-    if (func) {
-      if (-1 == func(arg)) {
-        break;
-      }
-    }
-  }
+  if (!ThreadEnv::Init()) return;
+  ThreadEnv::Current()->EventLoop(func, arg);
 }
 
 EpollCtx *co_get_epoll_ct() {
   if (!ThreadEnv::Current() && !ThreadEnv::Init()) {
     return nullptr;
   }
-  return ThreadEnv::Current()->Epoll();
+  return ThreadEnv::Current()->impl_->epoll_ctx_.get();
 }
 
 } // namespace co

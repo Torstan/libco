@@ -19,10 +19,6 @@ available.
 
 #pragma once
 
-#include "internal/stack.h"
-#include "internal/context.h"
-#include "internal/util.h"
-#include <stdint.h>
 #include <sys/poll.h>
 #include <sys/socket.h>
 #include <functional>
@@ -34,10 +30,17 @@ typedef int (*pfn_co_eventloop_t)(void *);
 
 class EpollCtx;
 class Coroutine;
-struct CoroutineDeleter {
-  void operator()(Coroutine *co) const;
-};
+namespace detail {
+class WaitTimer;
+class WaitRecord;
+Coroutine& RequireWaiter();
+void*& CoroutineEnvs(Coroutine&);
+}
+struct CoroutineDeleter;
 class ThreadEnvTls;
+class ThreadEnv;
+class ThreadWorker;
+class Task;
 
 // Coroutine class - encapsulates coroutine state and lifecycle
 class Coroutine {
@@ -47,39 +50,33 @@ public:
   // Get the currently running coroutine on this thread
   static Coroutine *Self();
 
-  int Run();
-
-  // Yield from the current coroutine back to the scheduler
+  // Yield from the current coroutine back to its caller.
   void Yield();
 
   // Lifecycle
   void Resume();
-  void Reset(); // allow re-use after timeout
+  // Only caller-owned, unstarted or ended coroutines may be reset/freed.
+  // Running, suspended, foreign-thread and scheduler-owned ones throw logic_error.
+  void Reset();
   void Free();
 
-  void EnableHook() { enable_sys_hook_ = true; }
-  void DisableHook() { enable_sys_hook_ = false; }
-  bool IsHookEnabled() const { return enable_sys_hook_; }
-
-  void *&GetSysEnvs() { return sys_envs_; }
-  // Internal: context access used by runtime internals
-  void SetMain() { is_main_ = true; }
+  void EnableHook();
+  void DisableHook();
+  bool IsHookEnabled() const;
 
 private:
   Coroutine(std::function<void()>&& func);
   ~Coroutine();
 
-  RoutineContext routine_ctx_;
-  std::function<void()> func_;
-
-  bool started_;
-  bool ended_;
-  bool is_main_;
-  bool enable_sys_hook_;
-  void *sys_envs_;
-  std::unique_ptr<StackMem> stack_mem_;
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
+  static int Entry(void*, void*);
+  int Run();
 
   friend class ThreadEnv;
+  friend Coroutine& detail::RequireWaiter();
+  friend void*& detail::CoroutineEnvs(Coroutine&);
+  friend class detail::WaitRecord;
   friend struct CoroutineDeleter;
 };
 
@@ -88,15 +85,29 @@ class ThreadEnv {
 public:
   static ThreadEnv *Current();
   static bool Init();
-  EpollCtx *Epoll() { return epoll_ctx_.get(); }
 
 private:
   ThreadEnv();
   ~ThreadEnv();
-  std::unique_ptr<EpollCtx> epoll_ctx_;
-  std::unique_ptr<Coroutine, CoroutineDeleter> main_coroutine_;
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
+  void Resume(Coroutine& co);
+  void Yield(Coroutine& co);
+  void RunTasks();
+  void RunReady();
+  void EventLoop(int (*callback)(void*), void *arg);
+  void Reap();
+  void RunLoop(bool forever);
+  static int LoopCallback(void *arg);
   friend class Coroutine;
+  friend class detail::WaitRecord;
+  friend class detail::WaitTimer;
+  friend void co_eventloop(int (*callback)(void*), void *arg);
+  friend class ThreadWorker;
   friend class ThreadEnvTls;
+  friend EpollCtx* co_get_epoll_ct();
+  friend void schedule(std::unique_ptr<Task> task);
+  friend void schedule_urgent(std::unique_ptr<Task> task);
 };
 
 // hook syscall ( poll/read/write/recv/send/recvfrom/sendto )
@@ -117,7 +128,6 @@ inline void co_free(Coroutine *co) { co->Free(); }
 inline Coroutine *co_self() { return Coroutine::Self(); }
 inline ThreadEnv *co_get_curr_thread_env() { return ThreadEnv::Current(); }
 
-EpollCtx *co_get_epoll_ct(); // defined in co_routine.cpp
 inline void co_disable_hook_sys() {
   if (auto *c = Coroutine::Self())
     c->DisableHook();

@@ -1,11 +1,12 @@
 #pragma once
 
-#include "task.h"
-#include "thread_worker.h"
+#include "internal/wait.h"
 #include <cassert>
 #include <exception>
 #include <stdexcept>
 #include <type_traits>
+#include <utility>
+#include <new>
 
 namespace co {
 
@@ -154,28 +155,15 @@ inline std::exception_ptr make_broken_promise_exception() noexcept {
     }
 }
 
-template<typename Func, typename T>
-struct Continuation final : Task {
-    Func _func;
-    FutureState<T> _state;
-    Continuation(Func&& func, FutureState<T>&& state) : _func(std::move(func)), _state(std::move(state)) {}
-    Continuation(Func&& func) : _func(std::move(func)) {}
-    virtual void run() override {
-        _func(std::move(_state));
-    }
-};
-
 template<typename T>
 class Promise {
-    enum class Urgent {no, yes};
     Future<T>* _future = nullptr;
     FutureState<T> _local_state;
     FutureState<T>* _state;
-    std::unique_ptr<Task> _task;
     static constexpr bool copy_noexcept = FutureState<T>::copy_noexcept;
 public:
     Promise() noexcept : _state(&_local_state) {}
-    Promise(Promise&& x) noexcept : _future(x._future), _state(x._state), _task(std::move(x._task)) {
+    Promise(Promise&& x) noexcept : _future(x._future), _state(x._state) {
         if (_state == &x._local_state) {
             _state = &_local_state;
             _local_state = std::move(x._local_state);
@@ -198,55 +186,36 @@ public:
     void operator=(const Promise&) = delete;
     Future<T> get_future() noexcept;
     void set_value(const T& result) noexcept(copy_noexcept) {
-        do_set_value<Urgent::no>(result);
+        do_set_value(result);
     }
     void set_value(T&& result) noexcept {
-        do_set_value<Urgent::no>(std::move(result));
+        do_set_value(std::move(result));
     }
     template <typename... A>
     void set_value(A&&... a) noexcept {
         assert(_state);
         _state->set(std::forward<A>(a)...);
-        make_ready<Urgent::no>();
+        make_ready();
     }
     void set_exception(std::exception_ptr ex) noexcept {
-        do_set_exception<Urgent::no>(std::move(ex));
+        do_set_exception(std::move(ex));
     }
     template<typename Exception>
     void set_exception(Exception&& ex) noexcept {
         set_exception(std::make_exception_ptr(std::forward<Exception>(ex)));
     }
 private:
-    template<Urgent urgent>
     void do_set_value(T result) noexcept {
         assert(_state);
         _state->set(std::move(result));
-        make_ready<urgent>();
+        make_ready();
     }
-    void set_urgent_value(const T& result) noexcept(copy_noexcept) {
-        do_set_value<Urgent::yes>(result);
-    }
-    void set_urgent_value(T&& result) noexcept {
-        do_set_value<Urgent::yes>(std::move(result));
-    }
-
-    template<Urgent urgent>
     void do_set_exception(std::exception_ptr e) noexcept {
         assert(_state);
         _state->set_exception(std::move(e));
-        make_ready<urgent>();
-    }
-    void set_urgent_exception(std::exception_ptr e) noexcept {
-        do_set_exception<Urgent::yes>(std::move(e));
+        make_ready();
     }
 private:
-    template <typename Func>
-    void schedule(Func&& func) {
-        auto con_task = std::make_unique<Continuation<Func, T>>(std::move(func));
-        _state = &con_task->_state;
-        _task = std::move(con_task);
-    }
-    template <Urgent urgent>
     void make_ready() noexcept;
     void migrated() noexcept;
     void abandoned() noexcept;
@@ -265,6 +234,7 @@ struct exception_future_marker {};
 template <typename T>
 class Future {
     Promise<T>* _promise;
+    detail::WaitRecord* _waiter = nullptr;
     FutureState<T> _local_state; //valid if !_promise
     static constexpr bool copy_noexcept = FutureState<T>::copy_noexcept;
 private:
@@ -285,17 +255,6 @@ private:
     FutureState<T>* state() noexcept {
         return _promise ? _promise->_state : &_local_state;
     }
-    template <typename Func>
-    void schedule(Func&& func) {
-        if (state()->available()) {
-            co::schedule(std::make_unique<Continuation<Func, T>>(std::move(func), std::move(*state())));
-        } else {
-            assert(_promise);
-            _promise->schedule(std::move(func));
-            _promise->_future = nullptr;
-            _promise = nullptr;
-        }
-    }
     FutureState<T> get_available_state() noexcept {
         auto st = state();
         if (_promise) {
@@ -308,6 +267,8 @@ public:
     using value_type = T;
     using promise_type = Promise<T>;
     Future(Future&& x) noexcept : _promise(x._promise) {
+        // An object with an active member call must remain alive and stationary.
+        if (x._waiter) std::terminate();
         if (!_promise) {
             _local_state = std::move(x._local_state);
         }
@@ -317,6 +278,7 @@ public:
         }
     }
     ~Future() {
+        if (_waiter) std::terminate();
         if (_promise) {
             _promise->_future = nullptr;
         }
@@ -331,28 +293,31 @@ public:
         return *this;
     }
     T get() {
+        if (_waiter) throw std::logic_error("Future already has a waiter");
         if (!state()->available()) {
             wait();
         }
         return get_available_state().get();
     }
     std::exception_ptr get_exception() {
+        if (_waiter) throw std::logic_error("Future already has a waiter");
+        if (!_promise && !_local_state.available()) {
+            throw std::logic_error("Future has no result state");
+        }
         return get_available_state().get_exception();
     }
     void wait() {
-        auto thread_ctx = ThreadWorker::current_context;
-        if (!thread_ctx) {
-            if (!state()->available()) {
-                throw std::logic_error("cannot wait on a not-ready Future without a coroutine context");
-            }
+        if (_waiter) throw std::logic_error("Future already has a waiter");
+        if (state()->available()) {
             return;
         }
-
-        schedule([this, thread_ctx] (FutureState<T>&& new_state) {
-            *state() = std::move(new_state);
-            ThreadWorker::switch_in(thread_ctx);
-        });
-        ThreadWorker::switch_out(thread_ctx);
+        if (!_promise) throw std::logic_error("Future has no result state");
+        detail::WaitRecord wait;
+        _waiter = &wait;
+        wait.SetCleanup([](void* ptr) noexcept {
+            static_cast<Future*>(ptr)->_waiter = nullptr;
+        }, this);
+        wait.Suspend();
     }
     bool available() noexcept {
         return state()->available();
@@ -372,21 +337,13 @@ public:
 
 template <typename T>
 inline Future<T> Promise<T>::get_future() noexcept {
-    assert(!_future && _state && !_task);
+    assert(!_future && _state);
     return Future<T>(this);
 }
 
 template <typename T>
-template <typename Promise<T>::Urgent urgent>
 inline void Promise<T>::make_ready() noexcept {
-    if (_task) {
-        _state = nullptr;
-        if (urgent == Urgent::yes) {
-            co::schedule_urgent(std::move(_task));
-        } else {
-            co::schedule(std::move(_task));
-        }
-    }
+    if (_future && _future->_waiter) _future->_waiter->Complete();
 }
 
 template <typename T>
@@ -400,20 +357,13 @@ template <typename T>
 void Promise<T>::abandoned() noexcept {
     if (_future) {
         assert(_state);
-        assert(_state->available() || !_task);
         if (!_state->available()) {
             _state->set_exception(make_broken_promise_exception());
         }
         _future->_local_state = std::move(*_state);
         _future->_promise = nullptr;
         _state = nullptr;
-    } else if (_task) {
-        assert(_state);
-        if (!_state->available()) {
-            _state->set_exception(make_broken_promise_exception());
-        }
-        _state = nullptr;
-        co::schedule(std::move(_task));
+        if (_future->_waiter) _future->_waiter->Complete();
     }
 }
 

@@ -1,25 +1,19 @@
 #pragma once
-#include "internal/co_link.h"
-#include "internal/event.h"
+#include <memory>
 
 namespace co {
-
-class CoCond;
-struct CoCondItem : public LinkItemBase<CoCondItem> {
-  TimeoutItem timeout;
-};
-
-class CoCond : public LinkedList<CoCondItem> {
+// Single-thread condition waiters. The condition must outlive its waiters.
+class CoCond {
 public:
-  CoCond() = default;
-  ~CoCond() = default;
-
+  CoCond();
+  ~CoCond();
+  CoCond(const CoCond&) = delete;
+  CoCond& operator=(const CoCond&) = delete;
   int Signal();
   int Broadcast();
   int Timedwait(int timeout_ms);
-
 private:
-  CoCondItem *Pop();
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
 };
-
-} // namespace co
+}

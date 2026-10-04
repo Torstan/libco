@@ -427,10 +427,15 @@ void connect_errno_child(int out_fd) {
 }
 
 risk::Result connect_errno_refused() {
-  ChildProbeResult child =
-      run_child_probe_with_timeout(connect_errno_child, 1500);
+  ChildProbeResult child;
+  int attempts = 0;
+  do {
+    child = run_child_probe_with_timeout(connect_errno_child, 1500);
+    ++attempts;
+  } while (attempts < 32 && probe_exit_code(child.status, kProbeNotReproduced));
   std::string actual =
-      child.output + "; " + risk::child_status_text(child.status);
+      std::to_string(attempts) + " attempts; " + child.output + "; " +
+      risk::child_status_text(child.status);
   if (probe_exit_code(child.status, kProbeNeedsEnvironment)) {
     return risk::needs_environment(
         "P1-CONNECT-ERRNO", "hooked `connect()` errno behavior",

@@ -18,7 +18,6 @@ available.
 */
 
 #include "io_backend.h"
-#include "timer_queue.h"
 #include <errno.h>
 #include <memory>
 #include <stdio.h>
@@ -26,29 +25,50 @@ available.
 #include <string.h>
 #include <system_error>
 #include <unistd.h>
+#include <cassert>
+#include <cstdint>
 
-namespace co {
+#if !defined(__APPLE__) && !defined(__FreeBSD__)
+#include <sys/epoll.h>
+#else
+#include <sys/event.h>
 
-namespace {
-
-struct FdGuard {
-  explicit FdGuard(int fd) : fd(fd) {}
-  ~FdGuard() {
-    if (fd >= 0) {
-      close(fd);
-    }
-  }
-
-  int release() {
-    int released = fd;
-    fd = -1;
-    return released;
-  }
-
-  int fd;
+// macOS/BSD: emulate epoll API with kqueue
+enum EPOLL_EVENTS {
+  EPOLLIN = 0X001,
+  EPOLLPRI = 0X002,
+  EPOLLOUT = 0X004,
+  EPOLLERR = 0X008,
+  EPOLLHUP = 0X010,
+  EPOLLRDNORM = 0x40,
+  EPOLLWRNORM = 0x004,
 };
 
-} // namespace
+#define EPOLL_CTL_ADD 1
+#define EPOLL_CTL_DEL 2
+#define EPOLL_CTL_MOD 3
+
+typedef union epoll_data {
+  void *ptr;
+  int fd;
+  uint32_t u32;
+  uint64_t u64;
+} epoll_data_t;
+
+struct epoll_event {
+  uint32_t events;
+  epoll_data_t data;
+};
+#endif
+
+
+namespace co {
+struct co_epoll_res {
+  int size;
+  epoll_event *events;
+  struct kevent *eventlist;
+};
+
 
 #if !defined(__APPLE__) && !defined(__FreeBSD__)
 
@@ -56,7 +76,8 @@ static int co_epoll_wait(int epfd, struct co_epoll_res *events, int maxevents,
                          int timeout) {
   return epoll_wait(epfd, events->events, maxevents, timeout);
 }
-static int co_epoll_ctl(int epfd, int op, int fd, struct epoll_event *ev) {
+static int co_epoll_ctl(int epfd, int op, int fd, struct epoll_event *ev,
+                        void *registrations) {
   return epoll_ctl(epfd, op, fd, ev);
 }
 static int co_epoll_create(int size) { return epoll_create(size); }
@@ -100,6 +121,7 @@ public:
   ~clsFdMap() {
     for (int i = 0; i < sizeof(m_pp) / sizeof(m_pp[0]); i++) {
       if (m_pp[i]) {
+        for (int j = 0; j < col_size; ++j) free(m_pp[i][j]);
         free(m_pp[i]);
         m_pp[i] = nullptr;
       }
@@ -134,19 +156,11 @@ public:
   }
 };
 
-static thread_local clsFdMap *s_fd_map = nullptr;
-
-static inline clsFdMap *get_fd_map() {
-  if (!s_fd_map) {
-    s_fd_map = new clsFdMap();
-  }
-  return s_fd_map;
-}
-
 struct kevent_pair_t {
   int fire_idx;
   int events;
   uint64_t u64;
+  bool active; // Failed cleanup retains storage, but must not dispatch user data.
 };
 static int co_epoll_create(int size) { return kqueue(); }
 static struct timespec milliseconds_to_timespec(int timeout_ms) {
@@ -176,6 +190,7 @@ static int co_epoll_wait(int epfd, struct co_epoll_res *events, int maxevents,
       errno = EINVAL;
       return -1;
     }
+    if (!ptr->active) continue;
 
     struct epoll_event *ev = nullptr;
     if (0 == ptr->fire_idx) {
@@ -198,33 +213,39 @@ static int co_epoll_wait(int epfd, struct co_epoll_res *events, int maxevents,
   }
   return j;
 }
-static int co_epoll_del(int epfd, int fd) {
-
+static int set_filters(int epfd, int fd, kevent_pair_t *ptr, int events) {
   struct timespec t = {0};
-  struct kevent_pair_t *ptr = (struct kevent_pair_t *)get_fd_map()->get(fd);
+  for (int bit : {EPOLLIN, EPOLLOUT}) {
+    if (!((ptr->events | events) & bit)) continue;
+    bool adding = (events & bit) != 0;
+    struct kevent kev = {0};
+    EV_SET(&kev, fd, bit == EPOLLIN ? EVFILT_READ : EVFILT_WRITE,
+           adding ? EV_ADD : EV_DELETE, 0, 0, ptr);
+    int ret;
+    do {
+      ret = kevent(epfd, &kev, 1, nullptr, 0, &t);
+    } while (ret < 0 && errno == EINTR);
+    // Closing an fd already removes its filters from kqueue.
+    if (ret < 0 && (adding || (errno != ENOENT && errno != EBADF))) return -1;
+    if (adding) ptr->events |= bit;
+    else ptr->events &= ~bit;
+  }
+  return 0;
+}
+static int co_epoll_del(int epfd, int fd, clsFdMap *fd_map) {
+  struct kevent_pair_t *ptr = (struct kevent_pair_t *)fd_map->get(fd);
   if (!ptr)
     return 0;
-  if (EPOLLIN & ptr->events) {
-    struct kevent kev = {0};
-    kev.ident = fd;
-    kev.filter = EVFILT_READ;
-    kev.flags = EV_DELETE;
-    kevent(epfd, &kev, 1, nullptr, 0, &t);
-  }
-  if (EPOLLOUT & ptr->events) {
-    struct kevent kev = {0};
-    kev.ident = fd;
-    kev.filter = EVFILT_WRITE;
-    kev.flags = EV_DELETE;
-    kevent(epfd, &kev, 1, nullptr, 0, &t);
-  }
-  get_fd_map()->clear(fd);
+  ptr->active = false;
+  if (set_filters(epfd, fd, ptr, 0) < 0) return -1;
+  fd_map->clear(fd);
   free(ptr);
   return 0;
 }
-static int co_epoll_ctl(int epfd, int op, int fd, struct epoll_event *ev) {
+static int co_epoll_ctl(int epfd, int op, int fd, struct epoll_event *ev,
+                        clsFdMap *fd_map) {
   if (EPOLL_CTL_DEL == op) {
-    return co_epoll_del(epfd, fd);
+    return co_epoll_del(epfd, fd, fd_map);
   }
 
   const int flags = (EPOLLIN | EPOLLOUT | EPOLLERR | EPOLLHUP);
@@ -233,71 +254,40 @@ static int co_epoll_ctl(int epfd, int op, int fd, struct epoll_event *ev) {
     return -1;
   }
 
-  if (EPOLL_CTL_ADD == op && get_fd_map()->get(fd)) {
+  auto *ptr = (kevent_pair_t *)fd_map->get(fd);
+  if (ptr && !ptr->active) {
+    if (co_epoll_del(epfd, fd, fd_map) < 0) return -1;
+    ptr = nullptr;
+  }
+  if (EPOLL_CTL_ADD == op && ptr) {
     errno = EEXIST;
     return -1;
-  } else if (EPOLL_CTL_MOD == op && !get_fd_map()->get(fd)) {
+  } else if (EPOLL_CTL_MOD == op && !ptr) {
     errno = ENOENT;
     return -1;
   }
 
-  struct kevent_pair_t *ptr = (struct kevent_pair_t *)get_fd_map()->get(fd);
   if (!ptr) {
     ptr = (kevent_pair_t *)calloc(1, sizeof(kevent_pair_t));
-    get_fd_map()->set(fd, ptr);
+    fd_map->set(fd, ptr);
   }
 
-  int ret = 0;
-  struct timespec t = {0};
-
-  // printf("ptr->events 0x%X\n",ptr->events);
-
-  if (EPOLL_CTL_MOD == op) {
-    // 1.delete if exists
-    if (ptr->events & EPOLLIN) {
-      struct kevent kev = {0};
-      EV_SET(&kev, fd, EVFILT_READ, EV_DELETE, 0, 0, nullptr);
-      kevent(epfd, &kev, 1, nullptr, 0, &t);
+  int old_events = ptr->events;
+  if (set_filters(epfd, fd, ptr, ev->events) < 0) {
+    int error = errno;
+    if (op == EPOLL_CTL_MOD) {
+      ptr->active = set_filters(epfd, fd, ptr, old_events) == 0;
+    } else {
+      co_epoll_del(epfd, fd, fd_map);
     }
-    // 1.delete if exists
-    if (ptr->events & EPOLLOUT) {
-      struct kevent kev = {0};
-      EV_SET(&kev, fd, EVFILT_WRITE, EV_DELETE, 0, 0, nullptr);
-      ret = kevent(epfd, &kev, 1, nullptr, 0, &t);
-      // printf("delete write ret %d\n",ret );
-    }
+    errno = error;
+    return -1;
   }
 
-  do {
-    if (ev->events & EPOLLIN) {
-
-      // 2.add
-      struct kevent kev = {0};
-      EV_SET(&kev, fd, EVFILT_READ, EV_ADD, 0, 0, ptr);
-      ret = kevent(epfd, &kev, 1, nullptr, 0, &t);
-      if (ret)
-        break;
-    }
-    if (ev->events & EPOLLOUT) {
-      // 2.add
-      struct kevent kev = {0};
-      EV_SET(&kev, fd, EVFILT_WRITE, EV_ADD, 0, 0, ptr);
-      ret = kevent(epfd, &kev, 1, nullptr, 0, &t);
-      if (ret)
-        break;
-    }
-  } while (0);
-
-  if (ret) {
-    get_fd_map()->clear(fd);
-    free(ptr);
-    return ret;
-  }
-
-  ptr->events = ev->events;
   ptr->u64 = ev->data.u64;
+  ptr->active = true;
 
-  return ret;
+  return 0;
 }
 
 static struct co_epoll_res *co_epoll_res_alloc(int n) {
@@ -336,62 +326,76 @@ static void co_epoll_res_free(struct co_epoll_res *ptr) {
 
 #endif
 
-// EpollCtx implementation
-EpollCtx::EpollCtx()
-    : epoll_fd_(-1), timeout_(nullptr), active_list_(nullptr),
-      timeout_list_(nullptr), result_(nullptr) {
-  FdGuard epoll_fd(co_epoll_create(MAX_EVENTS));
-  if (epoll_fd.fd < 0) {
-    int create_errno = errno;
-    if (create_errno == ENOMEM) {
-      throw std::bad_alloc();
-    }
-    throw std::system_error(create_errno, std::generic_category(),
-                            "co_epoll_create");
-  }
+#if defined(__APPLE__) || defined(__FreeBSD__)
+struct BackendRegistrations : clsFdMap {};
+#else
+struct BackendRegistrations {};
+#endif
 
-  std::unique_ptr<Timeout> timeout(new Timeout());
-  std::unique_ptr<TimeoutItemLink> active_list(new TimeoutItemLink());
-  std::unique_ptr<TimeoutItemLink> timeout_list(new TimeoutItemLink());
-
-  epoll_fd_ = epoll_fd.release();
-  timeout_ = timeout.release();
-  active_list_ = active_list.release();
-  timeout_list_ = timeout_list.release();
+static uint32_t NativeEvents(short events) {
+  uint32_t native = 0;
+  if (events & POLLIN) native |= EPOLLIN;
+  if (events & POLLOUT) native |= EPOLLOUT;
+  if (events & POLLERR) native |= EPOLLERR;
+  if (events & POLLHUP) native |= EPOLLHUP;
+  if (events & POLLRDNORM) native |= EPOLLRDNORM;
+  if (events & POLLWRNORM) native |= EPOLLWRNORM;
+  return native;
+}
+static short PollEvents(uint32_t events) {
+  short result = 0;
+  if (events & EPOLLIN) result |= POLLIN;
+  if (events & EPOLLOUT) result |= POLLOUT;
+  if (events & EPOLLERR) result |= POLLERR;
+  if (events & EPOLLHUP) result |= POLLHUP;
+  if (events & EPOLLRDNORM) result |= POLLRDNORM;
+  if (events & EPOLLWRNORM) result |= POLLWRNORM;
+  return result;
 }
 
-EpollCtx::~EpollCtx() {
-  delete active_list_;
-  delete timeout_list_;
-  delete timeout_;
-  co_epoll_res_free(result_);
-  if (epoll_fd_ >= 0) {
-    close(epoll_fd_);
-    epoll_fd_ = -1;
+struct EpollCtx::Impl {
+  BackendRegistrations registrations;
+  int fd{-1};
+  co_epoll_res *result{nullptr};
+  ~Impl() {
+    co_epoll_res_free(result);
+    if (fd >= 0) close(fd);
+  }
+};
+EpollCtx::EpollCtx() : impl_(std::make_unique<Impl>()) {
+  impl_->fd = co_epoll_create(MAX_EVENTS);
+  if (impl_->fd < 0) {
+    int error = errno;
+    if (error == ENOMEM) throw std::bad_alloc();
+    throw std::system_error(error, std::generic_category(), "co_epoll_create");
   }
 }
-
+EpollCtx::~EpollCtx() = default;
 int EpollCtx::wait(int timeout_ms) {
-  if (!result_) {
-    result_ = co_epoll_res_alloc(MAX_EVENTS);
-    if (!result_) {
-      errno = ENOMEM;
-      return -1;
-    }
+  if (!impl_->result) {
+    impl_->result = co_epoll_res_alloc(MAX_EVENTS);
+    if (!impl_->result) { errno = ENOMEM; return -1; }
   }
-  return co_epoll_wait(epoll_fd_, result_, MAX_EVENTS, timeout_ms);
+  return co_epoll_wait(impl_->fd, impl_->result, MAX_EVENTS, timeout_ms);
 }
-
-int EpollCtx::add(int fd, struct epoll_event *ev) {
-  return co_epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, fd, ev);
+IoEvent EpollCtx::event(int index) const {
+  const auto& native = impl_->result->events[index];
+  return {PollEvents(native.events), native.data.ptr};
 }
-
-int EpollCtx::del(int fd, struct epoll_event *ev) {
-  return co_epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, fd, ev);
+int EpollCtx::fd() const { return impl_->fd; }
+int EpollCtx::add(int fd, const IoEvent *event) {
+  epoll_event native{};
+  native.events = NativeEvents(event->events);
+  native.data.ptr = event->data;
+  return co_epoll_ctl(impl_->fd, EPOLL_CTL_ADD, fd, &native, &impl_->registrations);
 }
-
-int EpollCtx::mod(int fd, struct epoll_event *ev) {
-  return co_epoll_ctl(epoll_fd_, EPOLL_CTL_MOD, fd, ev);
+int EpollCtx::del(int fd, const IoEvent *) {
+  return co_epoll_ctl(impl_->fd, EPOLL_CTL_DEL, fd, nullptr, &impl_->registrations);
 }
-
+int EpollCtx::mod(int fd, const IoEvent *event) {
+  epoll_event native{};
+  native.events = NativeEvents(event->events);
+  native.data.ptr = event->data;
+  return co_epoll_ctl(impl_->fd, EPOLL_CTL_MOD, fd, &native, &impl_->registrations);
+}
 } // namespace co

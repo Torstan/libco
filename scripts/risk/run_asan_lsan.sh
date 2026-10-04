@@ -7,7 +7,7 @@ mkdir -p "$LOG_DIR"
 
 BUILD_DIR="build-asan"
 SANITIZER_PATTERNS="ERROR: AddressSanitizer|ERROR: LeakSanitizer|runtime error:|UndefinedBehaviorSanitizer|SUMMARY: UndefinedBehaviorSanitizer"
-LSAN_ENVIRONMENT_PATTERNS="LeakSanitizer has encountered a fatal error|LeakSanitizer does not work under ptrace"
+LSAN_ENVIRONMENT_PATTERNS="LeakSanitizer has encountered a fatal error|LeakSanitizer does not work under ptrace|detect_leaks is not supported on this platform"
 
 write_env_leak_record() {
   local status="$1"
@@ -48,6 +48,9 @@ if grep -E -q "$LSAN_ENVIRONMENT_PATTERNS" "$LOG_DIR/P1-leaks.asan-lsan.log"; th
     "LeakSanitizer could not complete in this environment"
 elif grep -E -q "ERROR: LeakSanitizer" "$LOG_DIR/P1-leaks.asan-lsan.log"; then
   write_env_leak_record "confirmed" "LeakSanitizer reported a leak"
+elif [ "$leak_status" -ne 0 ]; then
+  write_env_leak_record "not run" \
+    "Leak probe did not complete successfully (exit status $leak_status)"
 else
   write_env_leak_record "not reproduced" \
     "env probe completed without a LeakSanitizer leak report"

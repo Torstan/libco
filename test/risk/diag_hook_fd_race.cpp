@@ -26,6 +26,9 @@ static void hooked_reader(int fd, int rounds) {
     co_enable_hook_sys();
     for (int i = 0; i < rounds; ++i) {
       (void)fcntl(fd, F_GETFL, 0);
+      (void)fcntl(fd, F_SETFL, O_NONBLOCK);
+      struct timeval timeout = {0, 1000};
+      (void)setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
     }
   });
   co_resume(routine);

@@ -6,6 +6,7 @@ SRCROOT := $(ROOT)
 include $(ROOT)/co.mk
 
 LIBCO_SRCS := \
+	$(ROOT)/internal/poll.cpp \
 	$(ROOT)/internal/io_backend.cpp \
 	$(ROOT)/co_cond.cpp \
 	$(ROOT)/thread_worker.cpp \
@@ -42,6 +43,7 @@ endef
 $(foreach prog,$(ALL_PROGS),$(eval $(call RISK_PROGRAM_template,$(prog))))
 
 check: $(addprefix $(BUILD_DIR)/,$(RISK_CHECK_PROGS))
+	@bash ./test_asan_lsan_script.sh
 	@if [ -z "$(RISK_CHECK_PROGS)" ]; then \
 		echo "No risk-check programs configured"; \
 	else \

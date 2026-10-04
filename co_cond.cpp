@@ -1,69 +1,56 @@
 #include "co_cond.h"
-#include "internal/io_backend.h"
-#include "internal/timer_queue.h"
+#include "internal/event.h"
 #include "internal/util.h"
-#include "internal/co_link.h"
-#include "co_routine.h"
-#include <stdlib.h>
+#include <cerrno>
+#include <exception>
+#include <stdexcept>
 
 namespace co {
-
-static void OnSignalProcessEvent(TimeoutItem *item) {
-  Coroutine *co = (Coroutine *)item->arg;
-  co_resume(co);
+struct CoCondItem : LinkItemBase<CoCondItem> {
+  detail::WaitRecord wait;
+  detail::WaitTimer timer{wait};
+  ~CoCondItem() {
+    LinkedList<CoCondItem>::remove(this);
+    timer.Cancel();
+    wait.SetCleanup(nullptr, nullptr);
+  }
+  static void Detach(void *arg) noexcept {
+    auto* item = static_cast<CoCondItem*>(arg);
+    LinkedList<CoCondItem>::remove(item);
+    item->timer.Cancel();
+  }
+};
+struct CoCond::Impl { LinkedList<CoCondItem> waiters; };
+CoCond::CoCond() : impl_(std::make_unique<Impl>()) {}
+CoCond::~CoCond() {
+  if (!impl_->waiters.empty()) std::terminate();
 }
-
-static void ActivateWaiter(CoCondItem *cond_item) {
-  TimeoutItemLink::remove(&cond_item->timeout);
-  co_get_curr_thread_env()->Epoll()->active_list()->add_tail(
-      &cond_item->timeout);
-}
-
 int CoCond::Signal() {
-  CoCondItem *cond_item = Pop();
-  if (!cond_item) {
-    return 0;
+  auto* waiter = impl_->waiters.head;
+  if (waiter) {
+    waiter->wait.Complete();
+    impl_->waiters.pop_head();
   }
-  ActivateWaiter(cond_item);
   return 0;
 }
-
 int CoCond::Broadcast() {
-  for (;;) {
-    CoCondItem *cond_item = Pop();
-    if (!cond_item) {
-      return 0;
-    }
-    ActivateWaiter(cond_item);
-  }
-}
-
-int CoCond::Timedwait(int ms) {
-  CoCondItem *cond_item = (CoCondItem *)calloc(1, sizeof(CoCondItem));
-  cond_item->timeout.arg = co_self();
-  cond_item->timeout.process_func = OnSignalProcessEvent;
-
-  if (ms > 0) {
-    unsigned long long now = GetTickMS();
-    cond_item->timeout.expire_time_ms = now + ms;
-
-    int ret = co_get_curr_thread_env()->Epoll()->timeout()->AddItem(
-        &cond_item->timeout, now);
-    if (ret != 0) {
-      free(cond_item);
-      return ret;
-    }
-  }
-
-  add_tail(cond_item);
-
-  co_yield_ct();
-
-  remove(cond_item);
-  free(cond_item);
-
+  while (!impl_->waiters.empty()) Signal();
   return 0;
 }
-CoCondItem *CoCond::Pop() { return pop_head(); }
-
+int CoCond::Timedwait(int ms) {
+  try {
+    CoCondItem item;
+    if (ms > 0) {
+      int ret = item.timer.Arm(GetTickMS() + ms);
+      if (ret) return ret;
+    }
+    item.wait.SetCleanup(CoCondItem::Detach, &item);
+    impl_->waiters.add_tail(&item);
+    item.wait.Suspend();
+    return 0;
+  } catch (const std::logic_error&) {
+    errno = EINVAL;
+    return -1;
+  }
+}
 } // namespace co

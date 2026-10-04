@@ -26,6 +26,7 @@ int main() {
 
   std::cout << "Back to main!" << std::endl;
 
+  co_resume(co);
   co_free(co);
 
   std::cout << "Test completed!" << std::endl;

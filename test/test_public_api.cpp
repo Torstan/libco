@@ -1,6 +1,7 @@
 #include "co_routine.h"
 
 #include <sys/socket.h>
+#include <stdexcept>
 
 using namespace co;
 
@@ -23,6 +24,10 @@ int main() {
   if (!ran) {
     return 1;
   }
+  bool rejected = false;
+  try { routine->Reset(); } catch (const std::logic_error&) { rejected = true; }
+  if (!rejected) return 1;
+  co_resume(routine);
   routine->Reset();
   co_free(routine);
   co_free(initializer);

@@ -19,6 +19,36 @@ exposes C++ classes such as `co::Coroutine`, `co::CoCond`, `co::Future`,
 | Async tasks | `co_async.h`, `co_future.h` | `co::async`, `co::Future`, `co::Promise` |
 | Worker loop | `thread_worker.h` | `co::ThreadWorker::run_loop` |
 
+## Process and Thread Lifecycle
+
+The supported startup order is:
+
+```text
+Single-threaded process: fork, if needed
+  -> Each process: create worker threads, if needed
+    -> Each execution thread: initialize its own ThreadEnv
+      -> Create and run coroutines
+```
+
+Complete all `fork()` calls before creating worker threads. Initialize coroutine
+environments within the threads that will execute their coroutines; a
+single-threaded application may use its main thread.
+
+After any thread initializes a coroutine environment, `fork()` is unsupported
+throughout the process. This includes initialization performed implicitly by
+coroutine or scheduling APIs. Disabling hooks, finishing coroutines, or
+terminating worker threads does not restore fork support.
+
+Avoiding coroutine initialization alone is not sufficient to make a later
+multi-threaded `fork()` safe: `close()` and `fcntl()` can acquire the global fd
+metadata mutex even when hooks are disabled and no coroutine environment exists.
+A child could inherit a locked mutex whose owning thread no longer exists.
+
+Applications are responsible for following this startup order. Libco does not
+detect violations or recover inherited runtime state after an unsupported fork.
+Tests that fork must keep the parent single-threaded and free of coroutine
+environments, then initialize any threads and coroutine environments in the child.
+
 ## Build
 
 Using Make:
