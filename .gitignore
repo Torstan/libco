@@ -1,4 +1,7 @@
 README.md
+logs/
+test/risk/build-asan/
+test/risk/build-tsan/
 docs/superpowers
 
 # Prerequisites
