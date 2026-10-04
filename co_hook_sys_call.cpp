@@ -313,14 +313,9 @@ int connect(int fd, const struct sockaddr *address, socklen_t address_len) {
 int close(int fd) {
   HOOK_SYS_FUNC(close);
 
-  if (!co_is_enable_sys_hook()) {
-    return g_sys_close_func(fd);
-  }
-
+  // Descriptor metadata must be retired even when coroutine hooks are disabled.
   free_by_fd(fd);
-  int ret = g_sys_close_func(fd);
-
-  return ret;
+  return g_sys_close_func(fd);
 }
 ssize_t read(int fd, void *buf, size_t nbyte) {
   HOOK_SYS_FUNC(read);
@@ -508,18 +503,24 @@ int setsockopt(int fd, int level, int option_name, const void *option_value,
     return g_sys_setsockopt_func(fd, level, option_name, option_value,
                                  option_len);
   }
+  // Let the kernel validate the arguments before reading or caching them.
+  int ret = g_sys_setsockopt_func(fd, level, option_name, option_value,
+                                 option_len);
+  if (ret != 0) {
+    return ret;
+  }
   rpchook_t *lp = get_by_fd(fd);
 
-  if (lp && SOL_SOCKET == level) {
-    struct timeval *val = (struct timeval *)option_value;
+  if (lp && SOL_SOCKET == level && option_value &&
+      option_len >= sizeof(struct timeval)) {
+    const struct timeval *val = (const struct timeval *)option_value;
     if (SO_RCVTIMEO == option_name) {
       memcpy(&lp->read_timeout, val, sizeof(*val));
     } else if (SO_SNDTIMEO == option_name) {
       memcpy(&lp->write_timeout, val, sizeof(*val));
     }
   }
-  return g_sys_setsockopt_func(fd, level, option_name, option_value,
-                               option_len);
+  return ret;
 }
 
 static int handle_f_getfl(int fd, rpchook_t *hook) {

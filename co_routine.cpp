@@ -353,15 +353,12 @@ static void PollPrepareFunc(TimeoutItem *timeout_item, struct epoll_event &e,
 
 enum class PollRegisterResult {
   kRegistered,
-  kFallback,
   kError,
 };
 
 static PollRegisterResult RegisterPollFds(EpollCtx *ep_ctx,
                                           struct pollfd fds[], nfds_t nfds,
-                                          int timeout, poll_func_t poll_func,
-                                          PollBase *poll,
-                                          int *fallback_ret) {
+                                          PollBase *poll) {
   for (nfds_t i = 0; i < nfds; i++) {
     PollItem &item = poll->poll_items[i];
     item.self_pfd = poll->fds + i;
@@ -392,29 +389,13 @@ static PollRegisterResult RegisterPollFds(EpollCtx *ep_ctx,
             errno = add_errno;
           }
         }
-        if (ret < 0) {
-          return PollRegisterResult::kError;
-        }
       }
-      if (ret == 0) {
-        item.registered_fd = registered_fd;
-        item.owns_registered_fd = owns_registered_fd;
+      if (ret < 0) {
+        return PollRegisterResult::kError;
       }
-      if (ret < 0 && nfds == 1) {
-        int add_errno = errno;
-        bool should_fallback = add_errno == EPERM;
-        if (add_errno == EBADF) {
-          should_fallback = fcntl(fds[i].fd, F_GETFD) == -1 && errno == EBADF;
-        }
-        errno = add_errno;
-        if (should_fallback) {
-          *fallback_ret = poll_func ? poll_func(fds, nfds, timeout)
-                                    : SystemPoll(fds, nfds, 0);
-          return PollRegisterResult::kFallback;
-        }
-      }
+      item.registered_fd = registered_fd;
+      item.owns_registered_fd = owns_registered_fd;
     }
-    // if fail,the timeout would work
   }
   return PollRegisterResult::kRegistered;
 }
@@ -438,9 +419,10 @@ static void CleanupPoll(EpollCtx *ep_ctx, struct pollfd fds[], PollBase *poll) {
 
 int co_poll_inner(struct pollfd fds[], nfds_t nfds, int timeout,
                   poll_func_t poll_func) {
-  if (timeout == 0) {
-    return poll_func ? poll_func(fds, nfds, timeout)
-                     : SystemPoll(fds, nfds, timeout);
+  // Preserve native readiness/error semantics before using the async backend.
+  int ready = poll_func ? poll_func(fds, nfds, 0) : SystemPoll(fds, nfds, 0);
+  if (ready != 0 || timeout == 0) {
+    return ready;
   }
   EpollCtx *ep_ctx = co_get_epoll_ct();
   if (!ep_ctx) {
@@ -462,13 +444,8 @@ int co_poll_inner(struct pollfd fds[], nfds_t nfds, int timeout,
   }
   PollBase *poll = state->poll();
 
-  int fallback_ret = 0;
   PollRegisterResult register_result =
-      RegisterPollFds(ep_ctx, fds, nfds, timeout, poll_func, poll,
-                      &fallback_ret);
-  if (register_result == PollRegisterResult::kFallback) {
-    return fallback_ret;
-  }
+      RegisterPollFds(ep_ctx, fds, nfds, poll);
   if (register_result == PollRegisterResult::kError) {
     int register_errno = errno;
     CleanupPoll(ep_ctx, fds, poll);

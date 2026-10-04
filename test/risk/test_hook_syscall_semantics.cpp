@@ -8,6 +8,7 @@
 #include <poll.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
@@ -251,39 +252,98 @@ risk::Result stale_close_metadata() {
       "new fd does not inherit old hook metadata", actual, "risk-check");
 }
 
-risk::Result invalid_setsockopt_child() {
-  int status = risk::run_child_with_timeout(
-      []() {
-        Coroutine *routine = co_create([]() {
+// Compare against the real syscall with hooks disabled, including errno.
+risk::Result setsockopt_arguments(const char *scenario, int option,
+                                 const void *value, socklen_t length) {
+  ChildProbeResult child = run_child_probe_with_timeout(
+      [=](int out_fd) {
+        Coroutine *routine = co_create([=]() {
           co_enable_hook_sys();
           int fd = socket(AF_INET, SOCK_STREAM, 0);
           risk::require_syscall(fd >= 0, "socket");
-          setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, nullptr, 0);
+          co_disable_hook_sys();
+          errno = 0;
+          int expected = setsockopt(fd, SOL_SOCKET, option, value, length);
+          int expected_errno = errno;
+          co_enable_hook_sys();
+          errno = 0;
+          int actual = setsockopt(fd, SOL_SOCKET, option, value, length);
+          int actual_errno = errno;
+          bool matches = actual == expected &&
+                         (actual == 0 || actual_errno == expected_errno);
+          write_probe_line(out_fd,
+              "option=%d native=%d errno=%d hooked=%d errno=%d", option,
+              expected, expected_errno, actual, actual_errno);
           close(fd);
+          _exit(matches ? kProbeNotReproduced : kProbeConfirmed);
         });
         co_resume(routine);
         co_free(routine);
       },
       1000);
 
-  std::string actual = risk::child_status_text(status);
+  int status = child.status;
+  std::string actual = child.output + "; " + risk::child_status_text(status);
   if (WIFEXITED(status) && WEXITSTATUS(status) == 2) {
     return risk::needs_environment(
         "P1-SETSOCKOPT-INVALID",
-        "invalid timeout `setsockopt()` arguments",
+        scenario,
         "socket can be created", actual, "risk-check");
   }
   if (!risk::child_exited_cleanly(status)) {
     return risk::confirmed(
         "P1-SETSOCKOPT-INVALID",
-        "invalid timeout `setsockopt()` arguments",
-        "invalid option pointer and length do not crash before syscall",
+        scenario,
+        "match native return and errno without crashing",
         actual, "risk-check");
   }
   return risk::not_reproduced(
-      "P1-SETSOCKOPT-INVALID", "invalid timeout `setsockopt()` arguments",
-      "invalid option pointer and length do not crash before syscall", actual,
+      "P1-SETSOCKOPT-INVALID", scenario,
+      "match native return and errno without crashing", actual,
       "risk-check");
+}
+
+risk::Result setsockopt_timeout_cache() {
+  ChildProbeResult child = run_child_probe_with_timeout([](int out_fd) {
+    BoolState state;
+    run_bounded_coroutine(&state, [&]() {
+      co_enable_hook_sys();
+      int fd = socket(AF_INET, SOCK_DGRAM, 0);
+      risk::require_syscall(fd >= 0, "socket");
+      timeval valid = {0, 40000};
+      if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &valid, sizeof(valid)) != 0) {
+        write_probe_line(out_fd, "valid setsockopt failed: errno=%d", errno);
+        _exit(kProbeConfirmed);
+      }
+      timeval rejected = {0, 400000};
+      int rejected_ret = setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO,
+          &rejected, sizeof(rejected) - 1);
+      char byte;
+      unsigned long long start = risk::now_ms();
+      int ret = read(fd, &byte, 1);
+      int read_errno = errno;
+      unsigned long long elapsed = risk::now_ms() - start;
+      state.confirmed = rejected_ret != -1 || ret != -1 ||
+          (read_errno != EAGAIN && read_errno != EWOULDBLOCK) ||
+          elapsed < 20 || elapsed >= 250;
+      write_probe_line(out_fd, "rejected=%d read=%d errno=%d elapsed_ms=%llu",
+          rejected_ret, ret, read_errno, elapsed);
+      close(fd);
+      state.done = true;
+    });
+    _exit(state.done && !state.confirmed ? kProbeNotReproduced : kProbeConfirmed);
+  }, 1500);
+  const char *scenario = "failed setsockopt preserves the working read timeout";
+  std::string actual = child.output + "; " + risk::child_status_text(child.status);
+  if (probe_exit_code(child.status, kProbeNeedsEnvironment)) {
+    return risk::needs_environment("P1-SETSOCKOPT-INVALID", scenario,
+        "UDP socket and timeout can be configured", actual, "risk-check");
+  }
+  return risk::child_exited_cleanly(child.status)
+      ? risk::not_reproduced("P1-SETSOCKOPT-INVALID", scenario,
+          "read keeps the successful 40ms timeout", actual, "risk-check")
+      : risk::confirmed("P1-SETSOCKOPT-INVALID", scenario,
+          "read keeps the successful 40ms timeout", actual, "risk-check");
 }
 
 struct BoundLocalPort {
@@ -325,6 +385,10 @@ void connect_errno_child(int out_fd) {
     _exit(kProbeNeedsEnvironment);
   }
 
+  // A bound, non-listening socket can leave connect pending on macOS.
+  // Close it so the probe connects to an unused port and receives a refusal.
+  close(bound.fd);
+
   BoolState state;
   run_bounded_coroutine(&state, [&state, port = bound.port]() {
     co_enable_hook_sys();
@@ -351,12 +415,11 @@ void connect_errno_child(int out_fd) {
     snprintf(buf, sizeof(buf), "connect ret=%d errno=%d (%s)", ret,
              saved_errno, strerror(saved_errno));
     state.actual = buf;
-    state.confirmed = ret < 0 && saved_errno != ECONNREFUSED;
+    state.confirmed = ret != -1 || saved_errno != ECONNREFUSED;
     state.done = true;
   });
 
   write_probe_line(out_fd, "%s", state.actual.c_str());
-  close(bound.fd);
   if (state.needs_environment) {
     _exit(kProbeNeedsEnvironment);
   }
@@ -390,7 +453,32 @@ risk::Result connect_errno_refused() {
 int main() {
   std::vector<risk::Result> results;
   results.push_back(stale_close_metadata());
-  results.push_back(invalid_setsockopt_child());
+  timeval timeout = {0, 40000};
+  size_t page_size = static_cast<size_t>(sysconf(_SC_PAGESIZE));
+  void *unreadable = mmap(nullptr, page_size, PROT_NONE,
+                         MAP_PRIVATE | MAP_ANON, -1, 0);
+  for (int option : {SO_RCVTIMEO, SO_SNDTIMEO}) {
+    results.push_back(setsockopt_arguments("null pointer and zero length",
+        option, nullptr, 0));
+    results.push_back(setsockopt_arguments("null pointer and timeval length",
+        option, nullptr, sizeof(timeout)));
+    results.push_back(setsockopt_arguments("short timeout length",
+        option, &timeout, sizeof(timeout) - 1));
+    results.push_back(setsockopt_arguments("valid timeout",
+        option, &timeout, sizeof(timeout)));
+    if (unreadable != MAP_FAILED) {
+      results.push_back(setsockopt_arguments("unreadable option pointer",
+          option, unreadable, sizeof(timeout)));
+    }
+  }
+  if (unreadable != MAP_FAILED) {
+    munmap(unreadable, page_size);
+  } else {
+    results.push_back(risk::needs_environment("P1-SETSOCKOPT-INVALID",
+        "unreadable option pointer", "PROT_NONE mapping can be created",
+        "mmap failed", "risk-check"));
+  }
+  results.push_back(setsockopt_timeout_cache());
   results.push_back(connect_errno_refused());
   return risk::summarize(results);
 }
